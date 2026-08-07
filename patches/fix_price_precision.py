@@ -56,6 +56,31 @@ fix_price_precision.py — 봇의 페이퍼 트레이딩이 멈춘 원인 두 �
   3건으로는 아무것도 증명되지 않는다(승률 95% 신뢰구간 20.8~93.9%).
   표본이 30건 미만이면 색을 매기지 않고 "표본 부족"으로 표시한다.
 
+⑤ calc_stats()의 '기대값'이 정직한 평균 R과 다르다
+
+    losses = [t for t in trades if t['r'] <= -0.9]      # -0.9~0 은 제외
+    expectancy = 승률*avg_win + (1-승률)*avg_loss
+
+  r=0.0으로 끝난 거래(INVALID_GAP·NO_FILL)와 -0.9~0 사이 소액 손실이
+  승률 분모에는 들어가는데 avg_loss 계산에는 안 들어간다. 그래서 '0R로
+  끝난 거래'를 전액 손실처럼 취급한다.
+
+  실측: SMA_SHORT 33건 누적 -1.79R → 정직한 평균은 **-0.054R**(거의 본전)
+  인데 리포트에는 **-0.14R**로 찍혔다. 2.6배 부풀려진 손실이다.
+
+  기대값 = 누적 R / 건수 로 바꾼다. 이게 정의 그대로다.
+
+⑥ 백테스트가 실제 봇과 다른 전략을 재고 있다
+
+    backtest.py  SUPPORT_ZONE_PCT = 2.0    → 레벨 ±2.0%
+    bot.py       ENTRY_ZONE       = 0.005  → 레벨 ±0.5%
+
+  **4배 차이다.** 백테스트는 지금까지 실제 봇이 하는 매매를 한 번도
+  측정한 적이 없다. 봇 기준(0.5%)에 맞춘다.
+
+  (진입가도 다르다 — 백테스트는 종가 시장가, 봇은 지지선 지정가. 이건
+   구조가 달라 자동 패치로 못 맞추므로 여기서는 손대지 않는다.)
+
 되돌리려면
 ─────────
     각 파일 옆에 .bak 이 생깁니다. 그대로 덮어쓰면 원상복구됩니다.
@@ -154,6 +179,23 @@ BT_VERDICT_OLD = """        exp = st['expectancy']
         emoji = "🟢" if exp >= 0.15 else "🟡" if exp > 0 else "🔴"
         verdict = "자동화 후보" if exp >= 0.15 else "보류" if exp > 0 else "제외 권장\""""
 
+# ⑤ 기대값 = 누적 R / 건수
+BT_EXP_OLD = """    expectancy = round(win_rate/100 * avg_win + (1-win_rate/100) * avg_loss, 2)"""
+BT_EXP_NEW = """    # 기대값은 정의 그대로 '거래당 평균 R'이다.
+    #
+    # 예전 공식은 losses를 r <= -0.9 로만 잡아서, r=0.0으로 끝난 거래
+    # (INVALID_GAP·NO_FILL)와 -0.9~0 사이 소액 손실이 승률 분모에는
+    # 들어가면서 avg_loss에는 안 들어갔다. 그 결과 0R 거래를 전액 손실처럼
+    # 취급했다 — SMA_SHORT 33건이 실제 -0.054R인데 -0.14R로 찍혔다.
+    expectancy = round(total_r / total, 3) if total else 0.0"""
+
+# ⑥ 근접 판정 폭을 실제 봇(ENTRY_ZONE 0.005)에 맞춘다
+BT_ZONE_OLD = """SUPPORT_ZONE_PCT = 2.0  # config에서 가져와도 되지만 독립 실행을 위해 여기 정의"""
+BT_ZONE_NEW = """# 실제 봇의 detect_core_signal()은 ENTRY_ZONE = 0.005 (레벨 ±0.5%)를 쓴다.
+# 여기가 2.0이면 백테스트는 봇이 하지 않는 매매를 재게 된다 — 4배 넓은 자리다.
+# 봇과 같은 값으로 맞춘다. 예전 결과와 비교하려면 이 값을 2.0으로 되돌리면 된다.
+SUPPORT_ZONE_PCT = 0.5"""
+
 BT_VERDICT_NEW = """        exp = st['expectancy']
         # 표본이 모자라면 기대값의 부호를 믿을 수 없다.
         if st['total'] < MIN_TRADES_TO_TRUST:
@@ -222,6 +264,16 @@ def patch_backtest(src):
         if BT_VERDICT_OLD in src2:
             src2 = src2.replace(BT_VERDICT_OLD, BT_VERDICT_NEW, 1)
             changes.append("'자동화 후보' 판정에 표본 하한 30건")
+
+    # ⑤ 기대값 = 누적 R / 건수
+    if BT_EXP_OLD in src2:
+        src2 = src2.replace(BT_EXP_OLD, BT_EXP_NEW, 1)
+        changes.append("기대값을 '누적 R / 건수'로 (0R 거래를 손실 취급하던 문제)")
+
+    # ⑥ 근접 판정 폭을 봇과 일치
+    if BT_ZONE_OLD in src2:
+        src2 = src2.replace(BT_ZONE_OLD, BT_ZONE_NEW, 1)
+        changes.append("근접 판정 폭 2.0% → 0.5% (봇의 ENTRY_ZONE과 일치)")
 
     return src2, changes, 0
 
