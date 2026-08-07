@@ -45,6 +45,17 @@ fix_price_precision.py — 봇의 페이퍼 트레이딩이 멈춘 원인 두 �
   백테스트는 기다리지 않고 표본을 얻는 유일한 길인데, 여기가 틀리면
   그 결과도 못 믿는다. R·통계 값(2자리가 맞다)은 건드리지 않는다.
 
+④ 백테스트 리포트의 '자동화 후보' 판정에 표본 하한 추가
+
+  판정이 기대값만 보고 있어서 **3건짜리가 "🟢 자동화 후보"로 찍힌다.**
+  실제로 그렇게 나왔다:
+
+      🟢 SMA_LONG  +0.31R/거래 — 자동화 후보
+         3건 · 승률 66.7%
+
+  3건으로는 아무것도 증명되지 않는다(승률 95% 신뢰구간 20.8~93.9%).
+  표본이 30건 미만이면 색을 매기지 않고 "표본 부족"으로 표시한다.
+
 되돌리려면
 ─────────
     각 파일 옆에 .bak 이 생깁니다. 그대로 덮어쓰면 원상복구됩니다.
@@ -131,6 +142,27 @@ BT_PRICE_HINT = ("entry", "sl", "tp1", "tp2", "tp3", "fib_", "w_sup", "w_res",
 BT_STAT_HINT = ('"r"', "total_r", "avg_r", "avg_win", "avg_loss",
                 "expectancy", "max_dd", "win_rate")
 
+# ④ 자동화 후보 판정에 표본 하한
+BT_GATE_CONST = """SUPPORT_ZONE_PCT = 2.0"""
+BT_GATE_CONST_NEW = """# 이 건수 미만이면 기대값의 부호를 믿지 않는다.
+# 3건짜리 +0.31R이 '자동화 후보'로 찍히면 그 숫자를 근거로 실돈이 들어간다.
+MIN_TRADES_TO_TRUST = 30
+
+SUPPORT_ZONE_PCT = 2.0"""
+
+BT_VERDICT_OLD = """        exp = st['expectancy']
+        emoji = "🟢" if exp >= 0.15 else "🟡" if exp > 0 else "🔴"
+        verdict = "자동화 후보" if exp >= 0.15 else "보류" if exp > 0 else "제외 권장\""""
+
+BT_VERDICT_NEW = """        exp = st['expectancy']
+        # 표본이 모자라면 기대값의 부호를 믿을 수 없다.
+        if st['total'] < MIN_TRADES_TO_TRUST:
+            emoji = "⚪"
+            verdict = f"표본 부족 ({st['total']}건 — {MIN_TRADES_TO_TRUST}건 필요)"
+        else:
+            emoji = "🟢" if exp >= 0.15 else "🟡" if exp > 0 else "🔴"
+            verdict = "자동화 후보" if exp >= 0.15 else "보류" if exp > 0 else "제외 권장\""""
+
 
 def patch_bot(src):
     """(새 소스, 변경 내역, 이미 적용됨?)"""
@@ -180,7 +212,18 @@ def patch_backtest(src):
                 n += 1
     if n:
         changes.append(f"가격 반올림 {n}줄")
-    return "\n".join(lines), changes, 0
+
+    src2 = "\n".join(lines)
+
+    # ④ 자동화 후보 판정에 표본 하한
+    if "MIN_TRADES_TO_TRUST" not in src2:
+        if BT_GATE_CONST in src2:
+            src2 = src2.replace(BT_GATE_CONST, BT_GATE_CONST_NEW, 1)
+        if BT_VERDICT_OLD in src2:
+            src2 = src2.replace(BT_VERDICT_OLD, BT_VERDICT_NEW, 1)
+            changes.append("'자동화 후보' 판정에 표본 하한 30건")
+
+    return src2, changes, 0
 
 
 def process(path, fn, apply):
