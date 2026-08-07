@@ -192,6 +192,23 @@ python fix_price_precision.py          # 미리보기
 python fix_price_precision.py --apply  # 적용 (.bak 자동 백업)
 ```
 
+### 백테스트로 표본을 즉시 확보 (`patches/run_backtest.py`)
+
+`backtest.py`는 **함수만 정의된 라이브러리**다. `python backtest.py`를 실행하면
+진입점이 없어 아무 일도 일어나지 않는다 — 원래는 텔레그램 `/백테 btc 1y` 로
+부르게 돼 있다. `run_backtest.py`가 같은 일을 터미널에서 하게 해 준다.
+
+```bash
+python run_backtest.py            # 기본 10종 × 1년, 타입별 집계
+python run_backtest.py btc 6m     # BTC 6개월
+python run_backtest.py --all 20 2y
+```
+
+페이퍼 게이트는 "4주 + 30건"이지만, 백테스트는 과거 데이터로 **오늘 수백
+건**을 만든다. 신호 타입별 **기대값(R/거래)**만 보면 된다 — 🟢 +0.15R 이상이
+자동화 후보, 🔴 0 이하는 걸수록 잃는 타입이다. 승률이 높아도 기대값이
+음수면 잃는다.
+
 ## 면책
 
 정보 제공·연구 목적이다. 특정 금융투자상품의 매매를 권유하지 않는다.
