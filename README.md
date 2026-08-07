@@ -28,6 +28,7 @@
 | `kimchi_band.py` | 김프의 '최근 30일 범위 중 지금 위치' |
 | `healthcheck.py` | **점검** — 이 숫자를 근거로 써도 되는지 한 화면에서 |
 | `console.py` | 윈도우 cp949에서 출력 때문에 죽지 않게 |
+| `start.py` | **이거 하나만 실행하면 됩니다** — 순서를 몰라도 알아서 |
 | `selfcheck.py` | 봇 폴더에 제대로 붙었는지 자가진단 |
 | `demo_edge.py` | "적중률 81.9%"가 왜 실력이 아닐 수 있는지 재현 |
 
@@ -76,25 +77,27 @@ python3 -m unittest discover -s tests -t .   # 267개 테스트
 python3 demo_edge.py
 ```
 
-봇 폴더에 복사한 뒤에는 자가진단부터:
+봇 폴더에 복사한 뒤:
 
 ```bash
 cd /path/to/auto
-python selfcheck.py
+python selfcheck.py     # 제대로 붙었는지 (파일 누락 · 이름 충돌 · 예전 버전)
+python start.py         # 그냥 이거 하나 돌리면 됩니다
 ```
 
-파일 누락 · **이름 충돌** · 예전 버전 섞임을 잡아낸다. 통과하면 종료 코드 0,
-실패하면 1이라 스케줄러에 걸어도 된다.
+`start.py`는 봇의 시세 함수를 자동으로 찾아서, 지금이 어느 단계인지 스스로
+판단하고 알아서 합니다 — 처음이면 준비(기준 박기 → 소급 채점)를, 그다음부터는
+매일 할 일(사건 기록 → 밀린 채점 → 리포트 → 점검)을. 함수 이름을 외울 필요가
+없습니다.
 
-봇에 붙이는 방법: [`docs/통합_가이드.md`](docs/통합_가이드.md)
-
-가장 먼저 할 일은 소급 채점이다.
-
-```python
-import setup_ledger
-setup_ledger.backfill_universe(coins, get_ohlcv, timeframe="1d", bars=400)
-print(setup_ledger.get_report(horizon=3))
 ```
+python start.py setup     준비만
+python start.py daily     매일 할 일만
+python start.py report    리포트만
+python start.py check     점검만
+```
+
+모듈을 직접 부르고 싶으면: [`docs/통합_가이드.md`](docs/통합_가이드.md)
 
 ## 결론 내기 전에
 
