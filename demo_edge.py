@@ -25,6 +25,7 @@ import tempfile
 import pandas as pd
 
 import setup_ledger as sl
+import console
 
 SEED = 20260807
 N_SYMBOLS = 40
@@ -77,17 +78,17 @@ def main():
         decided = base["up"] + base["down"]
         base_up = base["up"] / decided
 
-        print()
-        print("=" * 72)
-        print(" 예측력이 0인 합성 시장에서 돌린 셋업 채점표 (3일 기준)")
-        print(f" 종목 {N_SYMBOLS} · 봉 {N_BARS} · 일일 드리프트 +{DAILY_DRIFT*100:.1f}%")
-        print("=" * 72)
-        print()
-        print(f" 기준선 — 아무 날이나 잡았을 때:  상승 {base_up*100:.1f}%  "
+        console.say()
+        console.say("=" * 72)
+        console.say(" 예측력이 0인 합성 시장에서 돌린 셋업 채점표 (3일 기준)")
+        console.say(f" 종목 {N_SYMBOLS} · 봉 {N_BARS} · 일일 드리프트 +{DAILY_DRIFT*100:.1f}%")
+        console.say("=" * 72)
+        console.say()
+        console.say(f" 기준선 — 아무 날이나 잡았을 때:  상승 {base_up*100:.1f}%  "
               f"하락 {(1-base_up)*100:.1f}%   (표본 {decided:,}건)")
-        print()
-        print(f" {'셋업':<24} {'방향':<6} {'표본':>7} {'적중률':>8} {'기준선':>8} {'초과':>9}")
-        print(" " + "-" * 68)
+        console.say()
+        console.say(f" {'셋업':<24} {'방향':<6} {'표본':>7} {'적중률':>8} {'기준선':>8} {'초과':>9}")
+        console.say(" " + "-" * 68)
 
         for r in sorted(st["rows"], key=lambda x: x["direction"]):
             if r["hit_rate"] is None:
@@ -95,28 +96,28 @@ def main():
             dir_kr = "상승" if r["direction"] == "up" else "하락"
             edge = r["edge"]
             edge_s = f"{edge*100:+.1f}%p" if edge is not None else "—"
-            print(f" {r['label']:<22} {dir_kr:<6} {r['samples']:>7,} "
+            console.say(f" {r['label']:<22} {dir_kr:<6} {r['samples']:>7,} "
                   f"{r['hit_rate']*100:>7.1f}% {r['baseline']*100:>7.1f}% "
                   f"{edge_s:>9}")
 
-        print()
-        print(" 참고 — MarketSurfer가 공개한 같은 셋업의 3일 적중률")
-        print(" ──────────────────────────────────────────────")
-        print("   디스카운트 81.9  아래쪽쓸림 74.8  고점돌파 69.5   (상승 셋업)")
-        print("   프리미엄  37.0  위쪽쓸림   26.3  저점이탈 28.3   (하락 셋업)")
-        print()
-        print(" 읽는 법")
-        print(" ─────────")
-        print(" · 위 표와 이 합성 표가 거의 같은 자리에 있다. 그런데 이 계열은")
-        print("   드리프트 얹은 잡음이라 셋업의 예측력이 정확히 0이다.")
-        print(" · 즉 '적중률' 칸만으로는 실력과 시장 방향을 구분할 수 없다.")
-        print(" · '초과' 칸이 진짜 값이다. 0 근처면 그 셋업이 한 일은 아무것도 없고,")
-        print("   시장이 오른 것을 셋업 성적으로 착각한 것이다.")
-        print(" · 그러니 '디스카운트 롱 81.9%'를 근거로 실돈을 넣으면 안 된다.")
-        print("   같은 셋업을 하락장에서 돌리면 그대로 뒤집힌다.")
-        print()
-        print("=" * 72)
-        print()
+        console.say()
+        console.say(" 참고 — MarketSurfer가 공개한 같은 셋업의 3일 적중률")
+        console.say(" ──────────────────────────────────────────────")
+        console.say("   디스카운트 81.9  아래쪽쓸림 74.8  고점돌파 69.5   (상승 셋업)")
+        console.say("   프리미엄  37.0  위쪽쓸림   26.3  저점이탈 28.3   (하락 셋업)")
+        console.say()
+        console.say(" 읽는 법")
+        console.say(" ─────────")
+        console.say(" · 위 표와 이 합성 표가 거의 같은 자리에 있다. 그런데 이 계열은")
+        console.say("   드리프트 얹은 잡음이라 셋업의 예측력이 정확히 0이다.")
+        console.say(" · 즉 '적중률' 칸만으로는 실력과 시장 방향을 구분할 수 없다.")
+        console.say(" · '초과' 칸이 진짜 값이다. 0 근처면 그 셋업이 한 일은 아무것도 없고,")
+        console.say("   시장이 오른 것을 셋업 성적으로 착각한 것이다.")
+        console.say(" · 그러니 '디스카운트 롱 81.9%'를 근거로 실돈을 넣으면 안 된다.")
+        console.say("   같은 셋업을 하락장에서 돌리면 그대로 뒤집힌다.")
+        console.say()
+        console.say("=" * 72)
+        console.say()
     finally:
         for p in (path, path + ".tmp"):
             if os.path.exists(p):

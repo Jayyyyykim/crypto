@@ -33,6 +33,8 @@ MarketSurfer의 '전 종목 다음 봉 예상 범위' 화면을 봇으로 옮긴
 
 import math
 
+import console
+
 # 기본 분위수 — 과거 봉 중 70%가 이 안에서 끝났다는 뜻.
 # 90%로 올리면 범위가 넓어져 "안 벗어남"이 당연해지고 판단에 못 쓴다.
 DEFAULT_Q = 0.70
@@ -218,7 +220,7 @@ def scan_universe(symbols, get_ohlcv_fn, timeframe="4h", get_price_fn=None,
         try:
             df = get_ohlcv_fn(symbol, timeframe, limit=DEFAULT_LOOKBACK + 20)
         except Exception as e:
-            print(f"[예상범위] 조회 실패 ({symbol} {timeframe}): {e}")
+            console.say(f"[예상범위] 조회 실패 ({symbol} {timeframe}): {e}")
             continue
         if df is None or len(df) == 0:
             continue

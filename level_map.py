@@ -31,6 +31,8 @@ MarketSurfer의 '전 종목 지지·저항 한 표' / '레벨 근접 TOP 50'을 
 '관성 무효화 가격'을 한 칸 따로 두는 이유가 이것이다.
 """
 
+import console
+
 # 프랙탈 판정 폭 — 좌우 이만큼보다 높으면(낮으면) 스윙 고점(저점)
 DEFAULT_PIVOT_WIDTH = 3
 
@@ -242,7 +244,7 @@ def level_radar(symbols, get_ohlcv_fn, timeframes=("4h", "1d"),
             try:
                 df = get_ohlcv_fn(symbol, tf, limit=300)
             except Exception as e:
-                print(f"[레벨레이더] 조회 실패 ({symbol} {tf}): {e}")
+                console.say(f"[레벨레이더] 조회 실패 ({symbol} {tf}): {e}")
                 continue
             if df is None or len(df) == 0:
                 continue

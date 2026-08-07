@@ -9,6 +9,7 @@ os.replace는 같은 파일시스템 안에서 원자적이라 그 창을 없앤
 
 import json
 import os
+import console
 
 
 def load(path, default=None):
@@ -30,7 +31,7 @@ def load(path, default=None):
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError, json.JSONDecodeError) as e:
-        print(f"[jsonstore] 읽기 실패 ({path}): {e}")
+        console.say(f"[jsonstore] 읽기 실패 ({path}): {e}")
         return default if default is not None else []
 
 
@@ -43,7 +44,7 @@ def save(path, obj):
         os.replace(tmp, path)
         return True
     except (OSError, TypeError, ValueError) as e:
-        print(f"[jsonstore] 저장 실패 ({path}): {e}")
+        console.say(f"[jsonstore] 저장 실패 ({path}): {e}")
         try:
             if os.path.exists(tmp):
                 os.remove(tmp)

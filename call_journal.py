@@ -46,6 +46,7 @@ import hashlib
 import json
 import os
 from datetime import datetime
+import console
 
 JOURNAL_FILE = "call_journal.jsonl"
 
@@ -104,7 +105,11 @@ def append(kind, payload, path=JOURNAL_FILE, at=None):
                  kind, payload)
     entry = dict(body, prev=prev, hash=_digest(prev, body))
 
-    with open(path, "a", encoding="utf-8") as f:
+    # newline="" 로 줄바꿈 변환을 끈다. 안 그러면 윈도우에서 CRLF로 저장돼
+    # 같은 기록장이 OS마다 다른 바이트가 된다. 해시는 내용으로 계산하므로
+    # 사슬 자체는 어느 쪽이든 깨지지 않지만, "한 번 적으면 안 바뀐다"는
+    # 파일을 OS 사이에 옮겼다고 바이트가 달라지면 곤란하다.
+    with open(path, "a", encoding="utf-8", newline="") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     return entry
 
@@ -362,4 +367,4 @@ def reset(path=JOURNAL_FILE):
     """
     if os.path.exists(path):
         os.remove(path)
-    print("🗑️ 발행 기록장 초기화 (전체 삭제만 가능합니다)")
+    console.say("🗑️ 발행 기록장 초기화 (전체 삭제만 가능합니다)")

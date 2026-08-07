@@ -47,6 +47,7 @@ regime_gate.py와 무엇이 다른가
 """
 
 from datetime import datetime, timedelta
+import console
 
 # 여섯 봉. 순서가 짧은 봉 → 긴 봉이고, 전환 우선순위가 이 순서를 따른다.
 SIX_TFS = ("4h", "12h", "1d", "3d", "1w", "1M")
@@ -181,7 +182,7 @@ def symbol_grid(symbol, get_ohlcv_fn, tfs=SIX_TFS, bars=300):
         try:
             df = get_ohlcv_fn(symbol, tf, limit=bars)
         except Exception as e:
-            print(f"[여섯봉] 조회 실패 ({symbol} {tf}): {e}")
+            console.say(f"[여섯봉] 조회 실패 ({symbol} {tf}): {e}")
             cells[tf] = None
             continue
         if df is None or len(df) == 0:

@@ -51,6 +51,7 @@ level_map은 **닿은 자리**(터치가 쌓인 수평 레벨)를 찾는다. 이
 
 import math
 
+import console
 import level_map
 
 # 기본 격자 사다리 — 0번선 기준 위아래. 사이트 표에 0·±0.5·±1·±2가 보였다.
@@ -307,7 +308,7 @@ def scan_universe(symbols, get_ohlcv_fn, timeframes=("1w", "1M"),
             try:
                 df = get_ohlcv_fn(symbol, tf, limit=300)
             except Exception as e:
-                print(f"[격자선] 조회 실패 ({symbol} {tf}): {e}")
+                console.say(f"[격자선] 조회 실패 ({symbol} {tf}): {e}")
                 continue
             if df is None or len(df) == 0:
                 continue

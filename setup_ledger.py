@@ -50,6 +50,7 @@ MarketSurfer의 '쏠린 자리 · 전일 고저 · 구간 위치' 채점표를 �
 import time
 from datetime import datetime
 
+import console
 import jsonstore
 
 LEDGER_FILE = "setup_ledger.json"
@@ -358,7 +359,7 @@ def backfill_universe(symbols, get_ohlcv_fn, timeframe="1d",
         try:
             df = get_ohlcv_fn(symbol, timeframe, limit=bars)
         except Exception as e:
-            print(f"[원장] 조회 실패 ({symbol}): {e}")
+            console.say(f"[원장] 조회 실패 ({symbol}): {e}")
             continue
         if df is None or len(df) == 0:
             continue
@@ -370,7 +371,7 @@ def backfill_universe(symbols, get_ohlcv_fn, timeframe="1d",
             baseline_keys[f"{symbol}|{timeframe}"] = base
 
     merge(all_events, path=path, baseline_keys=baseline_keys)
-    print(f"✅ [원장] 소급 채점 {len(all_events)}건 적재 ({len(symbols)}종목)")
+    console.say(f"✅ [원장] 소급 채점 {len(all_events)}건 적재 ({len(symbols)}종목)")
     return all_events
 
 
@@ -390,7 +391,7 @@ def capture(symbols, get_ohlcv_fn, timeframe="1d", regime=None,
         try:
             df = get_ohlcv_fn(symbol, timeframe, limit=RANGE_LOOKBACK + 40)
         except Exception as e:
-            print(f"[원장] 조회 실패 ({symbol}): {e}")
+            console.say(f"[원장] 조회 실패 ({symbol}): {e}")
             continue
         if df is None or len(df) == 0:
             continue
@@ -428,7 +429,7 @@ def capture(symbols, get_ohlcv_fn, timeframe="1d", regime=None,
 
     if new_events:
         merge(new_events, None, path=path)
-        print(f"✅ [원장] 신규 사건 {len(new_events)}건")
+        console.say(f"✅ [원장] 신규 사건 {len(new_events)}건")
     return new_events
 
 
@@ -459,7 +460,7 @@ def score_pending(get_ohlcv_fn, timeframe="1d", horizons=DEFAULT_HORIZONS,
         try:
             df = get_ohlcv_fn(symbol, timeframe, limit=400)
         except Exception as e:
-            print(f"[원장] 채점 조회 실패 ({symbol}): {e}")
+            console.say(f"[원장] 채점 조회 실패 ({symbol}): {e}")
             continue
         if df is None or len(df) == 0:
             continue
@@ -481,7 +482,7 @@ def score_pending(get_ohlcv_fn, timeframe="1d", horizons=DEFAULT_HORIZONS,
 
     if scored:
         _save(ledger, path)
-        print(f"✅ [원장] {scored}건 채점 완료")
+        console.say(f"✅ [원장] {scored}건 채점 완료")
     return scored
 
 
@@ -568,7 +569,7 @@ def merge(new_events, baseline=None, path=LEDGER_FILE, baseline_keys=None):
 def reset(path=LEDGER_FILE):
     _save({"events": [], "baseline": {}, "baseline_by_key": {},
            "baseline_legacy": {}}, path)
-    print("🗑️ 셋업 원장 초기화")
+    console.say("🗑️ 셋업 원장 초기화")
 
 
 # ================================

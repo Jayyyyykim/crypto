@@ -34,6 +34,7 @@ MarketSurfer의 '오늘 알트 매매 환경' / '지금 봇이 보는 시장'을
 import time
 from datetime import datetime, timedelta
 
+import console
 import jsonstore
 
 SNAPSHOT_FILE = "regime_snapshots.json"
@@ -88,7 +89,7 @@ def symbol_alignment(symbol, analyze_fn, tfs=SLOW_TFS):
         try:
             d = analyze_fn(symbol, tf)
         except Exception as e:
-            print(f"[환경] 분석 실패 ({symbol} {tf}): {e}")
+            console.say(f"[환경] 분석 실패 ({symbol} {tf}): {e}")
             d = None
         states[tf] = d.get("trend_code") if d else None
 

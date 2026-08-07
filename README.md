@@ -27,6 +27,7 @@
 | `grid_lines.py` | 격자선(번선) + **구조 적합도** |
 | `kimchi_band.py` | 김프의 '최근 30일 범위 중 지금 위치' |
 | `healthcheck.py` | **점검** — 이 숫자를 근거로 써도 되는지 한 화면에서 |
+| `console.py` | 윈도우 cp949에서 출력 때문에 죽지 않게 |
 | `demo_edge.py` | "적중률 81.9%"가 왜 실력이 아닐 수 있는지 재현 |
 
 ## 먼저 읽을 것
@@ -70,7 +71,7 @@ python3 demo_edge.py
 ## 쓰는 법
 
 ```bash
-python3 -m unittest discover -s tests -t .   # 249개 테스트
+python3 -m unittest discover -s tests -t .   # 267개 테스트
 python3 demo_edge.py
 ```
 
@@ -105,6 +106,35 @@ print(healthcheck.get_report(horizon=3))
 `healthcheck`가 **결론을 내기 전에 전제를 먼저 검사한다** — 사슬이 온전한지,
 기준이 도중에 바뀌지 않았는지, 기준선 표본이 충분한지, 그리고 지금 '우위
 있음'으로 보이는 셋업이 정말 그런지(초과값이 자기 오차보다 큰지).
+
+## 윈도우
+
+윈도우·맥·리눅스 다 된다. 표준 라이브러리만 쓰고, 경로를 문자열로 조합하는
+곳이 없고, 상태 파일 저장은 `os.replace`(윈도우에서도 덮어쓰기 원자적 동작)를 쓴다.
+
+한 가지만 알고 있으면 된다. **한국어 윈도우에서 출력을 파일로 넘길 때**
+파이썬은 cp949를 쓰는데 거기엔 이모지가 없다.
+
+```
+python bot.py > log.txt
+UnicodeEncodeError: 'cp949' codec can't encode character '\u2705'
+```
+
+봇은 보통 스케줄러가 로그 파일로 돌리므로, 소급 채점이 다 끝나고 성공
+메시지를 찍는 그 줄에서 작업이 죽는다 — 일은 이미 끝난 뒤에.
+
+라이브러리 안쪽은 `console.say()`로 바꿔 두어서 이제 안 죽는다(이모지만
+`?`로 낮춰 찍는다). 이모지를 그대로 보고 싶거나 `print(get_report(...))`처럼
+직접 찍는 코드까지 안전하게 하려면 봇 시작할 때 한 줄만 넣으면 된다.
+
+```python
+import console
+console.enable_utf8()      # 리눅스·맥에서는 아무 일도 안 한다
+```
+
+발행 기록장(`call_journal.jsonl`)은 어느 OS에서 써도 LF로 고정해 두었다.
+해시가 내용 기반이라 CRLF여도 사슬은 안 깨지지만, "한 번 적으면 안 바뀐다"는
+파일이 OS를 옮겼다고 바이트가 달라지면 곤란하기 때문이다.
 
 ## 면책
 
