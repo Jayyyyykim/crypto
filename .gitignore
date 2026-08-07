@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 런타임 상태 파일 (봇이 만든다 — 커밋하지 않는다)
+regime_snapshots.json
+setup_ledger.json
+*.json.tmp
