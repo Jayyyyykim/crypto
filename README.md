@@ -28,6 +28,7 @@
 | `kimchi_band.py` | 김프의 '최근 30일 범위 중 지금 위치' |
 | `healthcheck.py` | **점검** — 이 숫자를 근거로 써도 되는지 한 화면에서 |
 | `console.py` | 윈도우 cp949에서 출력 때문에 죽지 않게 |
+| `selfcheck.py` | 봇 폴더에 제대로 붙었는지 자가진단 |
 | `demo_edge.py` | "적중률 81.9%"가 왜 실력이 아닐 수 있는지 재현 |
 
 ## 먼저 읽을 것
@@ -74,6 +75,16 @@ python3 demo_edge.py
 python3 -m unittest discover -s tests -t .   # 267개 테스트
 python3 demo_edge.py
 ```
+
+봇 폴더에 복사한 뒤에는 자가진단부터:
+
+```bash
+cd /path/to/auto
+python selfcheck.py
+```
+
+파일 누락 · **이름 충돌** · 예전 버전 섞임을 잡아낸다. 통과하면 종료 코드 0,
+실패하면 1이라 스케줄러에 걸어도 된다.
 
 봇에 붙이는 방법: [`docs/통합_가이드.md`](docs/통합_가이드.md)
 
