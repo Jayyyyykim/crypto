@@ -350,7 +350,9 @@ def backfill_universe(symbols, get_ohlcv_fn, timeframe="1d",
                       regime_lookup=None, path=LEDGER_FILE):
     """전 종목 소급 채점 후 원장에 병합."""
     all_events = []
-    total_baseline = {h: {"up": 0, "down": 0, "flat": 0} for h in horizons}
+    # 종목·봉별로 따로 담는다 — 같은 백필을 다시 돌려도 기준선이 두 배가
+    # 되지 않고 그 출처만 갈아끼워진다.
+    baseline_keys = {}
 
     for symbol in symbols:
         try:
@@ -364,11 +366,10 @@ def backfill_universe(symbols, get_ohlcv_fn, timeframe="1d",
         evs, base = backfill(symbol, df, timeframe, horizons,
                              regime_lookup=regime_lookup)
         all_events.extend(evs)
-        for h, counts in base.items():
-            for k, v in counts.items():
-                total_baseline[h][k] += v
+        if base:
+            baseline_keys[f"{symbol}|{timeframe}"] = base
 
-    merge(all_events, total_baseline, path=path)
+    merge(all_events, path=path, baseline_keys=baseline_keys)
     print(f"✅ [원장] 소급 채점 {len(all_events)}건 적재 ({len(symbols)}종목)")
     return all_events
 
@@ -488,12 +489,39 @@ def score_pending(get_ohlcv_fn, timeframe="1d", horizons=DEFAULT_HORIZONS,
 # 💾 저장
 # ================================
 
+def _blank_baseline():
+    return {"up": 0, "down": 0, "flat": 0}
+
+
+def _add_counts(dst, src):
+    for h, counts in (src or {}).items():
+        slot = dst.setdefault(str(h), _blank_baseline())
+        for k, v in (counts or {}).items():
+            slot[k] = slot.get(k, 0) + v
+    return dst
+
+
+def _effective_baseline(data):
+    """실제로 쓰는 기준선 = 멱등 저장분(by_key) + 예전 가산분(legacy)."""
+    out = {}
+    _add_counts(out, data.get("baseline_legacy"))
+    for counts in (data.get("baseline_by_key") or {}).values():
+        _add_counts(out, counts)
+    return out
+
+
 def _load(path=LEDGER_FILE):
     data = jsonstore.load(path, default={})
     if not isinstance(data, dict):
         data = {}
     data.setdefault("events", [])
-    data.setdefault("baseline", {})
+    data.setdefault("baseline_by_key", {})
+    if "baseline_legacy" not in data:
+        # 예전 파일 이관 — 그때의 baseline은 가산분으로 본다.
+        data["baseline_legacy"] = data.get("baseline") or {}
+    # baseline은 저장된 값이 아니라 위 둘에서 매번 다시 만든 값이다.
+    # (그래서 다시 읽어도 두 번 더해지지 않는다)
+    data["baseline"] = _effective_baseline(data)
     return data
 
 
@@ -501,8 +529,19 @@ def _save(data, path=LEDGER_FILE):
     return jsonstore.save(path, data)
 
 
-def merge(new_events, baseline=None, path=LEDGER_FILE):
-    """id 기준 중복 제거 병합. 같은 종목·같은 날·같은 타입은 한 건이다."""
+def merge(new_events, baseline=None, path=LEDGER_FILE, baseline_keys=None):
+    """
+    id 기준 중복 제거 병합. 같은 종목·같은 날·같은 타입은 한 건이다.
+
+    baseline_keys: {"BTC/USDT|1d": {horizon: counts}} — **덮어쓴다**.
+
+    사건은 id로 중복 제거되는데 기준선만 그냥 더해지면, 소급 채점을 두 번
+    돌렸을 때 기준선 표본이 두 배가 된다. 초과 적중률(= 적중률 − 기준선)이
+    이 저장소의 핵심 숫자라 기준선이 틀어지면 결론 전체가 흔들린다.
+    그래서 출처(종목|봉)별로 저장하고, 다시 돌리면 그 출처만 갈아끼운다.
+
+    baseline(키 없는 형태)은 예전 호출부 호환용이며 종전처럼 가산된다.
+    """
     data = _load(path)
     seen = {e["id"]: e for e in data["events"]}
     for ev in new_events:
@@ -513,19 +552,22 @@ def merge(new_events, baseline=None, path=LEDGER_FILE):
             seen[ev["id"]] = ev
     data["events"] = list(seen.values())
 
+    if baseline_keys:
+        for key, counts in baseline_keys.items():
+            data["baseline_by_key"][key] = {
+                str(h): dict(c) for h, c in (counts or {}).items()
+            }
     if baseline:
-        base = data["baseline"]
-        for h, counts in baseline.items():
-            slot = base.setdefault(str(h), {"up": 0, "down": 0, "flat": 0})
-            for k, v in counts.items():
-                slot[k] = slot.get(k, 0) + v
+        _add_counts(data["baseline_legacy"], baseline)
 
+    data["baseline"] = _effective_baseline(data)
     _save(data, path)
     return data
 
 
 def reset(path=LEDGER_FILE):
-    _save({"events": [], "baseline": {}}, path)
+    _save({"events": [], "baseline": {}, "baseline_by_key": {},
+           "baseline_legacy": {}}, path)
     print("🗑️ 셋업 원장 초기화")
 
 
@@ -584,7 +626,10 @@ def stats(horizon=3, path=LEDGER_FILE, source=None, regime=None,
     for t, r in rows.items():
         decided = r["hit"] + r["miss"]
         total = decided + r["flat"]
-        if total < min_samples:
+        # 게이트는 **판정 건수**로 건다. 보합까지 세면 "표본 45건"이라 써 놓고
+        # 실제로는 판정 5건으로 낸 100%를 싣게 된다 — 보합은 분자에도
+        # 분모에도 안 들어가므로 적중률을 뒷받침하지 못한다.
+        if decided < min_samples:
             continue
         hit_rate = r["hit"] / decided if decided else None
         base = baseline_rate(data["baseline"], horizon, r["direction"])

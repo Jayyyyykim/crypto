@@ -26,6 +26,7 @@
 | `risk_calc.py` | 리스크 관리 계산기 — 손절 거리 기반 크기 · R · 본전 승률 |
 | `grid_lines.py` | 격자선(번선) + **구조 적합도** |
 | `kimchi_band.py` | 김프의 '최근 30일 범위 중 지금 위치' |
+| `healthcheck.py` | **점검** — 이 숫자를 근거로 써도 되는지 한 화면에서 |
 | `demo_edge.py` | "적중률 81.9%"가 왜 실력이 아닐 수 있는지 재현 |
 
 ## 먼저 읽을 것
@@ -69,7 +70,7 @@ python3 demo_edge.py
 ## 쓰는 법
 
 ```bash
-python3 -m unittest discover -s tests -t .   # 209개 테스트
+python3 -m unittest discover -s tests -t .   # 249개 테스트
 python3 demo_edge.py
 ```
 
@@ -82,6 +83,28 @@ import setup_ledger
 setup_ledger.backfill_universe(coins, get_ohlcv, timeframe="1d", bars=400)
 print(setup_ledger.get_report(horizon=3))
 ```
+
+## 결론 내기 전에
+
+```python
+import healthcheck
+print(healthcheck.get_report(horizon=3))
+```
+
+지금까지 이 저장소에서 찾은 버그는 **전부 조용히 틀린 숫자**였다. 예외도 안 나고
+표도 그럴듯하게 그려지는데 숫자의 뜻이 달라지는 것들이다.
+
+| 어디 | 무슨 일이 났나 |
+|---|---|
+| `level_map.cluster_levels` | 3.6% 폭을 레벨 하나로 뭉쳐 놓고 "터치 8회"라고 적었다 |
+| `expected_range.check_trade_levels` | 숏 손절을 *하단* 여유와 비교해 경고 근거가 반대였다 |
+| `setup_ledger.stats` | "표본 45건"이라 적고 실제로는 판정 5건으로 낸 100%였다 |
+| `setup_ledger.merge` | 소급 채점을 두 번 돌리면 기준선 표본이 두 배가 됐다 |
+
+넷 다 고쳤고 회귀 테스트로 못 박았다. 그래도 이런 건 또 들어오므로,
+`healthcheck`가 **결론을 내기 전에 전제를 먼저 검사한다** — 사슬이 온전한지,
+기준이 도중에 바뀌지 않았는지, 기준선 표본이 충분한지, 그리고 지금 '우위
+있음'으로 보이는 셋업이 정말 그런지(초과값이 자기 오차보다 큰지).
 
 ## 면책
 

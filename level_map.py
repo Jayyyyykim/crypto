@@ -89,7 +89,12 @@ def cluster_levels(pivots, total_bars, tol=DEFAULT_CLUSTER_TOL):
     groups = []
     cur = [ordered[0]]
     for idx, price in ordered[1:]:
-        ref = cur[-1][1]
+        # 기준은 그룹의 **첫 값**이다. 직전 값과 비교하면 사슬처럼 이어져
+        # 클러스터가 tol보다 훨씬 넓어진다 — 0.5%씩 떨어진 피벗 8개가
+        # tol 0.6%인데도 3.6% 폭의 레벨 하나로 뭉쳤다. 그러면 "여러 번
+        # 닿은 자리"가 아니라 "넓은 구간"이 되어 레벨의 뜻이 사라진다.
+        # 첫 값 기준이면 클러스터 폭이 tol을 넘지 않는다.
+        ref = cur[0][1]
         if ref > 0 and abs(price - ref) / ref <= tol:
             cur.append((idx, price))
         else:

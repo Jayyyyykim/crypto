@@ -269,6 +269,19 @@ def check_trade_levels(er, entry, sl, tp1):
 
     페이퍼 트레이딩에서 '왜 이 신호는 항상 털렸나'를 사후에 따지지 않고
     사전에 거르기 위한 것. 반환은 경고 문자열 리스트 (비어 있으면 통과).
+
+    ⚠️ 방향을 반드시 가려야 한다
+    ──────────────────────────
+    처음엔 손절을 늘 하단 여유와, 목표를 늘 상단 여유와 비교했다. 롱에서는
+    맞지만 **숏에서는 정확히 반대**다 — 숏의 손절은 위에 있으므로 상단
+    여유와 재야 하고, 목표는 아래에 있으므로 하단 여유와 재야 한다.
+
+    이 모듈이 존재하는 이유가 "코인은 위아래 폭이 다르다"인데, 정작 숏에서
+    두 폭을 바꿔 쓰면 경고가 반대로 나온다. 실제로 상단 1.15% / 하단 3.51%인
+    계열에서 숏 손절 0.2%를 "하단 3.5%의 절반보다 가깝다"고 잡았다 —
+    맞는 결론이지만 근거가 틀렸고, 폭이 뒤집힌 종목에서는 결론까지 틀린다.
+
+    방향은 손절 위치로 판단한다 (risk_calc.plan()과 같은 규칙).
     """
     if not er or not entry:
         return []
@@ -278,21 +291,33 @@ def check_trade_levels(er, entry, sl, tp1):
     dn_room = (base - er["lower"]) / base   # 한 봉 안에 아래로 갈 수 있는 폭
     up_room = (er["upper"] - base) / base
 
+    # 손절이 진입가 아래면 롱, 위면 숏. 손절이 없으면 목표로 가른다.
+    if sl:
+        is_long = sl < entry
+    elif tp1:
+        is_long = tp1 > entry
+    else:
+        is_long = True
+
+    # 손절이 놓이는 쪽 / 목표가 놓이는 쪽
+    sl_room, sl_side = (dn_room, "하단") if is_long else (up_room, "상단")
+    tp_room, tp_side = (up_room, "상단") if is_long else (dn_room, "하단")
+
     if sl:
         sl_dist = abs(entry - sl) / entry
-        if sl_dist < dn_room * 0.5:
+        if sl_dist < sl_room * 0.5:
             warnings.append(
-                f"손절이 한 봉 예상 하단의 절반보다 가깝다 "
-                f"(손절 {sl_dist*100:.1f}% vs 예상 하단 {dn_room*100:.1f}%) — "
+                f"손절이 한 봉 예상 {sl_side}의 절반보다 가깝다 "
+                f"(손절 {sl_dist*100:.1f}% vs 예상 {sl_side} {sl_room*100:.1f}%) — "
                 f"신호 품질과 무관하게 노이즈로 털릴 자리"
             )
 
     if tp1:
         tp_dist = abs(tp1 - entry) / entry
-        if tp_dist > up_room * 2:
+        if tp_dist > tp_room * 2:
             warnings.append(
-                f"TP1이 한 봉 예상 상단의 2배 밖 "
-                f"(목표 {tp_dist*100:.1f}% vs 예상 상단 {up_room*100:.1f}%) — "
+                f"TP1이 한 봉 예상 {tp_side}의 2배 밖 "
+                f"(목표 {tp_dist*100:.1f}% vs 예상 {tp_side} {tp_room*100:.1f}%) — "
                 f"여러 봉을 들고 가야 닿는 목표"
             )
 
