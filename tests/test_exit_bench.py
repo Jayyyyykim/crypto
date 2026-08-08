@@ -104,6 +104,21 @@ class TestSimulate(unittest.TestCase):
         r = fx.simulate(frame(bars), 0, True, "D 고정3R")
         self.assertLess(r, 0, "동시 터치인데 이익으로 처리했다")
 
+    def test_trailing_stop_is_checked_within_the_same_bar(self):
+        """고점을 찍고 같은 봉에서 되밀리면 그 봉에서 손절돼야 한다.
+
+        안 그러면 손절을 올려두고 되밀림은 다음 봉에서야 검사하게 된다 —
+        추적손절에 한 봉짜리 미래를 공짜로 주는 셈이라 성적이 부풀려진다.
+        """
+        # 진입 100, ATR 2 → 초기 손절 97. 한 봉에서 고점 130, 저점 100.
+        # 고점 130 → 손절 126 으로 상승. 같은 봉 저점 100 이 126 아래다.
+        bars = (self.flat(1) + [(100.0, 100.0, 100.0, 100.0)]
+                + [(100.0, 130.0, 100.0, 129.0)]
+                + [(129.0, 300.0, 129.0, 299.0)])      # 다음 봉은 폭등
+        r = fx.simulate(frame(bars), 0, True, "B 추적2ATR")
+        self.assertLess(r, 10.0, "같은 봉 되밀림을 놓치고 다음 봉 폭등을 먹었다")
+        self.assertGreater(r, 7.0, "126 근처에서 나왔어야 한다")
+
     def test_nan_atr_returns_none(self):
         bars = self.flat(3)
         self.assertIsNone(fx.simulate(frame(bars, atr=float("nan")), 0, True, "A 현행"))

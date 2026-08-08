@@ -160,6 +160,22 @@ def simulate(d, i, long_side, exit_name):
             new_stop = best - s * trail * float(atr)
             stop = max(stop, new_stop) if long_side else min(stop, new_stop)
 
+            # 올린 손절을 **같은 봉 안에서** 다시 검사한다.
+            #
+            # 봉 안에서 고점과 저점 중 뭐가 먼저였는지는 알 수 없다. 이걸
+            # 안 하면 '고점을 찍어 손절을 올려두고, 그 봉에서 되밀린 건
+            # 다음 봉에서야 검사'하게 된다 — 추적손절에 한 봉짜리 미래를
+            # 공짜로 주는 셈이라 성적이 부풀려진다.
+            # 보수적으로: 같은 봉에서 둘 다 닿았으면 손절된 것으로 본다.
+            if (long_side and hit <= stop) or (not long_side and hit >= stop):
+                if tp1_hit:
+                    exits = [(tp1, 0.5), (stop, 0.5)]
+                    gross = realized + 0.5 * s * (stop - entry) / unit
+                else:
+                    exits = [(stop, 1.0)]
+                    gross = s * (stop - entry) / unit
+                return round(gross - bt._cost_r(entry, exits, unit), 3)
+
     last = float(closes[-1])
     if tp1_hit:
         exits = [(tp1, 0.5), (last, 0.5)]
