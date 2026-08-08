@@ -104,6 +104,7 @@ def toggles():
         ("표본 하한", getattr(bt, "MIN_TRADES_TO_TRUST", None), 30, "④"),
         ("손절 ATR 배수", getattr(bt, "ATR_STOP_MULT", None), 1.5, "⑧"),
         ("4H 정배열 요구", getattr(bt, "MID_H4_STRICT", None), False, "⑨"),
+        ("레벨 소스", getattr(bt, "LEVEL_SOURCE", None), "levelmap", "⑩"),
     ]
     out = []
     for label, got, want, num in rows:
