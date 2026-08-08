@@ -34,9 +34,17 @@ run_backtest.py — 백테스트를 터미널에서 바로 돌립니다
    가능성이 높습니다.
 """
 
+import os
 import re
 import sys
 import time
+
+# 이 파일을 하위 폴더(예: patches/)에 두고 `python patches/run_backtest.py`
+# 로 돌리면, 파이썬은 sys.path[0]에 **스크립트가 있는 폴더**를 넣는다.
+# 그러면 backtest.py 를 못 찾는다. 지금 폴더도 후보에 넣어 준다.
+for _cand in (os.getcwd(), os.path.dirname(os.path.abspath(__file__))):
+    if os.path.exists(os.path.join(_cand, "backtest.py")) and _cand not in sys.path:
+        sys.path.insert(0, _cand)
 
 try:
     import console
@@ -48,7 +56,8 @@ try:
     from backtest import parse_backtest_command, run_backtest, run_multi_backtest
 except ImportError as e:
     print(f"backtest.py 를 못 불렀습니다: {e}")
-    print("이 스크립트는 봇 폴더(backtest.py 가 있는 곳)에서 실행해야 합니다.")
+    print(f"지금 폴더: {os.getcwd()}")
+    print("봇 폴더(backtest.py 가 있는 곳)에서 실행하십시오.")
     raise SystemExit(1)
 
 # 기본 대상 — config에 있으면 그걸 쓰고, 없으면 아래 목록

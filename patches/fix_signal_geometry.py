@@ -393,6 +393,7 @@ def main(argv):
     print("=" * 62)
     print("  중기 신호 기하 수정 (backtest.py 전용)")
     print("=" * 62)
+    print(f"  대상 폴더: {os.getcwd()}")
     if not apply:
         print("\n  미리보기입니다. 실제로 바꾸려면 --apply 를 붙이십시오.")
 
