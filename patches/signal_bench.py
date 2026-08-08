@@ -172,6 +172,54 @@ def split(ts, mid):
 
 # ── 거래 만들기 ──────────────────────────────────────────────
 
+# 한 코인에서 동시에 한 포지션만 잡는다.
+#
+# 이걸 안 걸면 신호가 연달아 뜨는 구간에서 같은 가격 움직임을 여러
+# 거래가 나눠 갖는다. 건수는 늘어나는데 **서로 독립이 아니라서**
+# 신뢰구간이 실제보다 좁게 나온다 — 없는 확신이 생긴다.
+# ('변동성수축 후 상승'이 2,644건이었는데, 그건 전체 봉의 26%다.
+#  신호가 아니라 거의 상시 켜져 있는 상태였다.)
+#
+# 실제 봇도 한 코인에 포지션을 겹쳐 잡지 않으므로 이쪽이 현실적이다.
+NO_OVERLAP = True
+
+_LONG_TYPES = ("MID_LONG", "FIB_LONG", "SMA_LONG", "ANGEL")
+
+
+def hold_bars(d, sig, max_bars=60):
+    """이 거래가 몇 봉 뒤에 끝나는가. evaluate_trade 와 같은 규칙.
+
+    중복 방지 게이트에만 쓴다. 성적 자체는 backtest.evaluate_trade 가
+    내므로, 여기가 한두 봉 어긋나도 결과값이 틀어지지는 않는다.
+    """
+    i = sig["idx"]
+    long_side = sig["type"] in _LONG_TYPES
+    fut = d.iloc[i + 1: i + 1 + max_bars]
+    if len(fut) == 0:
+        return 1
+    entry = float(fut["open"].iloc[0])
+    stop, tp1, tp2 = float(sig["sl"]), float(sig["tp1"]), float(sig["tp2"])
+    highs = fut["high"].to_numpy()
+    lows = fut["low"].to_numpy()
+    tp1_hit = False
+    for k in range(len(fut)):
+        h, l = highs[k], lows[k]
+        if long_side:
+            if l <= stop:
+                return k + 1
+            if not tp1_hit and h >= tp1:
+                tp1_hit, stop = True, entry
+            if tp1_hit and h >= tp2:
+                return k + 1
+        else:
+            if h >= stop:
+                return k + 1
+            if not tp1_hit and l <= tp1:
+                tp1_hit, stop = True, entry
+            if tp1_hit and l <= tp2:
+                return k + 1
+    return len(fut)
+
 def make_trade(d, i, long_side):
     """모든 후보가 같은 구조를 쓴다 — 진입 시점만 다르다."""
     row = d.iloc[i]
@@ -202,11 +250,17 @@ def random_trades(d, coin, long_side, n=SAMPLES_PER_COIN):
     if hi <= lo:
         return []
     rng = random.Random(zlib.crc32(f"{coin}/{'L' if long_side else 'S'}".encode()))
-    out = []
+    out, free_at = [], -1
+    # 기준선도 같은 규칙을 받아야 공정하다. 무작위 표본이 겹치면
+    # 기준선 쪽만 신뢰구간이 좁아져 비교가 기울어진다.
     for i in sorted(rng.sample(range(lo, hi), min(n, hi - lo))):
+        if NO_OVERLAP and i <= free_at:
+            continue
         t = make_trade(d, i, long_side)
         if t:
             out.append(t)
+            if NO_OVERLAP:
+                free_at = i + hold_bars(d, t)
     return out
 
 
@@ -234,7 +288,10 @@ def run(coins, days, only=None):
         for name, long_side, cond in CANDIDATES:
             if only and name not in only:
                 continue
+            free_at = -1
             for i in range(200, len(d) - 1):
+                if NO_OVERLAP and i <= free_at:
+                    continue
                 try:
                     ok = bool(cond(d, i))
                 except Exception:
@@ -244,6 +301,8 @@ def run(coins, days, only=None):
                 t = make_trade(d, i, long_side)
                 if t:
                     hits[name].append(t)
+                    if NO_OVERLAP:
+                        free_at = i + hold_bars(d, t)
     return hits, base, failed
 
 
@@ -274,6 +333,7 @@ def main(argv):
     print(f"  대상 폴더: {os.getcwd()}")
     print(f"  {len(coins)}종 × {days}일 · 후보 {len(CANDIDATES)}개")
     print("  손절 1.5×ATR · 목표 1R/2R/3R · 진입 시점만 다름")
+    print(f"  한 코인 동시 포지션 1개: {'예' if NO_OVERLAP else '아니오'}")
     print("  3~6분 걸립니다...")
     t0 = time.time()
 

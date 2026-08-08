@@ -140,5 +140,61 @@ class TestTradeShape(unittest.TestCase):
         self.assertLess(max(t["idx"] for t in out), len(d) - 1)
 
 
+class TestNoOverlap(unittest.TestCase):
+    """겹치는 거래는 서로 독립이 아니다 — 신뢰구간이 실제보다 좁아진다."""
+
+    def setUp(self):
+        fx.bt = types.SimpleNamespace(
+            ATR_STOP_MULT=1.5,
+            evaluate_trade=lambda sig, df: {"r": 0.0},
+        )
+
+    def frame(self, n=400, drift=0.0):
+        import pandas as pd
+        close = [100.0 + i * drift for i in range(n)]
+        return pd.DataFrame({
+            "timestamp": pd.date_range("2024-01-01", periods=n, freq="1D"),
+            "open": close, "close": close,
+            "high": [c + 0.2 for c in close], "low": [c - 0.2 for c in close],
+            "atr": [2.0] * n,
+        })
+
+    def test_hold_bars_hits_stop(self):
+        """손절이 먼저 닿으면 그 봉에서 끝난다."""
+        import pandas as pd
+        d = self.frame(n=100)
+        d.loc[10:, "low"] = 50.0                     # 진입 직후 급락
+        sig = {"idx": 5, "type": "MID_LONG", "sl": 90.0, "tp1": 110.0, "tp2": 120.0}
+        self.assertEqual(fx.hold_bars(d, sig), 5)    # idx 5 → 10번 봉이 5봉째
+
+    def test_hold_bars_times_out(self):
+        """아무것도 안 닿으면 max_bars 까지 들고 있다."""
+        d = self.frame(n=400)
+        sig = {"idx": 200, "type": "MID_LONG", "sl": 1.0, "tp1": 9e9, "tp2": 9e9}
+        self.assertEqual(fx.hold_bars(d, sig, max_bars=60), 60)
+
+    def test_hold_bars_short_is_mirrored(self):
+        d = self.frame(n=100)
+        d.loc[10:, "high"] = 200.0
+        sig = {"idx": 5, "type": "MID_SHORT", "sl": 110.0, "tp1": 90.0, "tp2": 80.0}
+        self.assertEqual(fx.hold_bars(d, sig), 5)
+
+    def test_hold_bars_at_the_end_is_safe(self):
+        d = self.frame(n=100)
+        sig = {"idx": 99, "type": "MID_LONG", "sl": 1.0, "tp1": 9e9, "tp2": 9e9}
+        self.assertEqual(fx.hold_bars(d, sig), 1)
+
+    def test_random_baseline_respects_no_overlap(self):
+        """기준선도 같은 규칙을 받아야 비교가 기울지 않는다."""
+        d = self.frame(n=400)
+        out = fx.random_trades(d, "BTC", True, n=200)
+        idxs = [t["idx"] for t in out]
+        self.assertEqual(idxs, sorted(idxs))
+        gaps = [b - a for a, b in zip(idxs, idxs[1:])]
+        self.assertTrue(all(g > 0 for g in gaps))
+        if fx.NO_OVERLAP:
+            self.assertLess(len(out), 200, "겹치는 표본이 안 걸러졌다")
+
+
 if __name__ == "__main__":
     unittest.main()
