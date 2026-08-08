@@ -4,6 +4,15 @@ fix_price_precision.py — 봇의 페이퍼 트레이딩이 멈춘 원인 두 �
     cd /path/to/auto
     python fix_price_precision.py          # 뭘 바꿀지 먼저 보여주기만
     python fix_price_precision.py --apply  # 실제로 적용 (원본은 .bak 로 백업)
+    python fix_price_precision.py --verify # 봇이 실제로 부르는 코드에 반영됐나
+
+수정 ①~⑥ 각각의 상태를 따로 찍습니다. 파일 단위로 한 줄만 찍으면 '절반만
+적용된' 상태를 구분할 수 없습니다 — 실제로 ①②③만 들어간 파일이 "이미
+적용됨"으로 보여서, 리포트를 바꾸는 ④⑤⑥이 빠진 걸 놓친 적이 있습니다.
+
+--verify 는 디스크가 아니라 **import 되는 모듈**을 봅니다. 파일을 고쳐도
+리포트가 그대로면 대개 (a) 봇 프로세스를 재시작하지 않아 옛 코드가 메모리에
+남아 있거나, (b) 다른 폴더의 사본을 쓰고 있는 것입니다. 둘 다 잡아냅니다.
 
 무엇을 고치나
 ────────────
@@ -206,141 +215,274 @@ BT_VERDICT_NEW = """        exp = st['expectancy']
             verdict = "자동화 후보" if exp >= 0.15 else "보류" if exp > 0 else "제외 권장\""""
 
 
-def patch_bot(src):
-    """(새 소스, 변경 내역, 이미 적용됨?)"""
-    changes = []
-    done = 0
+import re
 
+# 수정 하나하나의 상태. 파일 단위로 한 줄만 찍으면 '일부만 적용된' 상태를
+# 구분할 수 없다 — 실제로 ①②③만 들어간 파일이 "이미 적용됨"으로 보여서
+# 리포트를 바꾸는 ④⑤⑥이 빠진 걸 아무도 눈치채지 못했다.
+TODO, DONE, GONE = "적용 예정", "이미 적용됨", "대상 없음"
+
+
+def patch_bot(src):
+    """(새 소스, [(수정번호, 설명, 상태), ...])"""
+    items = []
+
+    hit = miss = 0
     for old, new in BOT_ROUNDING:
         if old in src:
             src = src.replace(old, new, 1)
-            changes.append(f"반올림: {old.strip()[:52]}")
+            hit += 1
         elif new in src:
-            done += 1
+            miss += 1
+    total = len(BOT_ROUNDING)
+    if hit:
+        items.append(("①", f"analyze_timeframe 가격 반올림 {hit}줄", TODO))
+    elif miss == total:
+        items.append(("①", f"analyze_timeframe 가격 반올림 {total}줄", DONE))
+    else:
+        items.append(("①", f"analyze_timeframe 가격 반올림 ({miss}/{total}줄만 확인)", GONE))
 
     if BOT_PRICE_OLD in src:
         src = src.replace(BOT_PRICE_OLD, BOT_PRICE_NEW, 1)
-        changes.append("근접 판정 기준을 실시간 시세로")
+        items.append(("②", "근접 판정 기준을 실시간 시세로", TODO))
     elif "live_price = get_current_price(symbol)" in src:
-        done += 1
+        items.append(("②", "근접 판정 기준을 실시간 시세로", DONE))
+    else:
+        items.append(("②", "근접 판정 기준을 실시간 시세로", GONE))
 
-    return src, changes, done
+    return src, items
 
 
 def patch_backtest(src):
-    import re
-    changes = []
-    if "def round_px(" not in src:
-        if BT_ANCHOR not in src:
-            return src, [], 0
+    items = []
+
+    # ③ round_px 정의 + 가격 반올림
+    #
+    # 정의를 못 넣어도 ④⑤⑥까지 같이 포기하면 안 된다. 예전 판은 여기서
+    # 곧장 return 해서, 앵커가 어긋나면 리포트 수정 셋이 통째로 조용히
+    # 건너뛰어졌다.
+    has_def = "def round_px(" in src
+    if not has_def and BT_ANCHOR in src:
         src = src.replace(BT_ANCHOR, BT_ANCHOR + ROUND_PX_SRC, 1)
-        changes.append("round_px() 추가")
+        has_def = True
 
-    lines = src.split("\n")
-    n = 0
-    for i, ln in enumerate(lines):
-        if ", 2)" not in ln or "round(" not in ln:
-            continue
-        if any(h in ln for h in BT_STAT_HINT):
-            new = re.sub(r'"exit":\s*round\(([^,]+), 2\)', r'"exit": round_px(\1)', ln)
-            if new != ln:
-                lines[i] = new
-                n += 1
-            continue
-        if any(h in ln for h in BT_PRICE_HINT):
-            new = re.sub(r"round\(([^;]+?), 2\)", r"round_px(\1)", ln)
-            if new != ln:
-                lines[i] = new
-                n += 1
-    if n:
-        changes.append(f"가격 반올림 {n}줄")
-
-    src2 = "\n".join(lines)
+    if has_def:
+        lines = src.split("\n")
+        n = 0
+        for i, ln in enumerate(lines):
+            if ", 2)" not in ln or "round(" not in ln:
+                continue
+            if any(h in ln for h in BT_STAT_HINT):
+                new = re.sub(r'"exit":\s*round\(([^,]+), 2\)', r'"exit": round_px(\1)', ln)
+                if new != ln:
+                    lines[i] = new
+                    n += 1
+                continue
+            if any(h in ln for h in BT_PRICE_HINT):
+                new = re.sub(r"round\(([^;]+?), 2\)", r"round_px(\1)", ln)
+                if new != ln:
+                    lines[i] = new
+                    n += 1
+        src = "\n".join(lines)
+        done = src.count("round_px(") - 1  # 정의 자신을 뺀 호출 수
+        items.append(("③", f"backtest 가격 반올림 {n}줄" if n
+                      else f"backtest 가격 반올림 {done}줄", TODO if n else DONE))
+    else:
+        items.append(("③", "backtest 가격 반올림 (SLIPPAGE 앵커를 못 찾음)", GONE))
 
     # ④ 자동화 후보 판정에 표본 하한
-    if "MIN_TRADES_TO_TRUST" not in src2:
-        if BT_GATE_CONST in src2:
-            src2 = src2.replace(BT_GATE_CONST, BT_GATE_CONST_NEW, 1)
-        if BT_VERDICT_OLD in src2:
-            src2 = src2.replace(BT_VERDICT_OLD, BT_VERDICT_NEW, 1)
-            changes.append("'자동화 후보' 판정에 표본 하한 30건")
+    if "MIN_TRADES_TO_TRUST" in src:
+        items.append(("④", "'자동화 후보' 판정에 표본 하한 30건", DONE))
+    elif BT_VERDICT_OLD in src:
+        # 상수는 SUPPORT_ZONE_PCT 값이 2.0이든 0.5든 붙도록 정규식으로 건다.
+        src = re.sub(r"^SUPPORT_ZONE_PCT\s*=", BT_GATE_CONST_NEW.split("\nSUPPORT")[0]
+                     + "\n\nSUPPORT_ZONE_PCT =", src, count=1, flags=re.M)
+        src = src.replace(BT_VERDICT_OLD, BT_VERDICT_NEW, 1)
+        items.append(("④", "'자동화 후보' 판정에 표본 하한 30건", TODO))
+    else:
+        items.append(("④", "'자동화 후보' 판정에 표본 하한 30건", GONE))
 
     # ⑤ 기대값 = 누적 R / 건수
-    if BT_EXP_OLD in src2:
-        src2 = src2.replace(BT_EXP_OLD, BT_EXP_NEW, 1)
-        changes.append("기대값을 '누적 R / 건수'로 (0R 거래를 손실 취급하던 문제)")
+    if BT_EXP_OLD in src:
+        src = src.replace(BT_EXP_OLD, BT_EXP_NEW, 1)
+        items.append(("⑤", "기대값을 '누적 R / 건수'로", TODO))
+    elif "expectancy = round(total_r / total, 3)" in src:
+        items.append(("⑤", "기대값을 '누적 R / 건수'로", DONE))
+    else:
+        items.append(("⑤", "기대값을 '누적 R / 건수'로", GONE))
 
     # ⑥ 근접 판정 폭을 봇과 일치
-    if BT_ZONE_OLD in src2:
-        src2 = src2.replace(BT_ZONE_OLD, BT_ZONE_NEW, 1)
-        changes.append("근접 판정 폭 2.0% → 0.5% (봇의 ENTRY_ZONE과 일치)")
+    if BT_ZONE_OLD in src:
+        src = src.replace(BT_ZONE_OLD, BT_ZONE_NEW, 1)
+        items.append(("⑥", "근접 판정 폭 2.0% → 0.5%", TODO))
+    elif re.search(r"^SUPPORT_ZONE_PCT\s*=\s*0\.5\b", src, re.M):
+        items.append(("⑥", "근접 판정 폭 0.5%", DONE))
+    else:
+        items.append(("⑥", "근접 판정 폭 2.0% → 0.5%", GONE))
 
-    return src2, changes, 0
+    return src, items
+
+
+MARK = {TODO: "□", DONE: "✅", GONE: "⚠️"}
 
 
 def process(path, fn, apply):
+    """(성공?, 아직 적용 안 된 수정 수)"""
     if not os.path.exists(path):
-        print(f"  [건너뜀] {path} 없음")
-        return None
+        print(f"\n  {path} — 파일이 없습니다. 봇 폴더에서 실행하십시오.")
+        return None, 0
 
     with open(path, encoding="utf-8") as f:
         src = f.read()
 
-    new, changes, already = fn(src)
+    new, items = fn(src)
+    todo = [i for i in items if i[2] == TODO]
 
-    if not changes:
-        state = "이미 적용됨" if already else "바꿀 것 없음"
-        print(f"  [{state}] {path}")
-        return True
+    print(f"\n  {path}")
+    for num, label, state in items:
+        shown = "적용" if (state == TODO and apply) else state
+        print(f"    {MARK[state]} {num} {label} — {shown}")
+
+    if not todo:
+        return True, 0
 
     try:
         ast.parse(new)
     except SyntaxError as e:
-        print(f"  [실패] {path} — 수정 후 문법 오류: {e}")
-        return False
-
-    print(f"  [{'적용' if apply else '적용 예정'}] {path} — {len(changes)}건")
-    for c in changes[:4]:
-        print(f"      · {c}")
-    if len(changes) > 4:
-        print(f"      · 외 {len(changes)-4}건")
+        print(f"    [실패] 수정 후 문법 오류: {e} — 원본은 그대로 둡니다")
+        return False, len(todo)
 
     if apply:
         shutil.copy2(path, path + ".bak")
         with open(path, "w", encoding="utf-8") as f:
             f.write(new)
-        print(f"      백업: {path}.bak")
-    return True
+        print(f"    백업: {path}.bak")
+        return True, 0
+    return True, len(todo)
+
+
+def verify():
+    """디스크가 아니라 **파이썬이 실제로 불러오는** 모듈을 확인한다.
+
+    파일을 고쳐도 리포트가 안 바뀌는 경우가 있다. 봇이 다른 폴더의 사본을
+    쓰고 있거나, 돌아가던 프로세스를 재시작하지 않아 옛 코드가 메모리에
+    남아 있는 경우다. 여기서는 import 해서 그 모듈의 __file__과 실제 값을
+    찍는다 — 이게 진짜 돌아가는 코드다.
+    """
+    print("=" * 62)
+    print("  실제 로드되는 모듈 확인")
+    print("=" * 62)
+
+    ok = True
+    try:
+        import backtest
+    except Exception as e:
+        print(f"\n  backtest 를 import 하지 못했습니다: {type(e).__name__}: {e}")
+        print("  (봇이 쓰는 파이썬으로 돌려야 합니다 — 가상환경을 켜십시오)")
+        print("\n  대신 파일 내용만으로 확인합니다:")
+        if not os.path.exists("backtest.py"):
+            print("    backtest.py 가 이 폴더에 없습니다.")
+            return 1
+        with open("backtest.py", encoding="utf-8") as f:
+            src = f.read()
+        for label, good in (
+            ("round_px 정의        (③)", "def round_px(" in src),
+            ("MIN_TRADES_TO_TRUST  (④)", "MIN_TRADES_TO_TRUST = 30" in src),
+            ("기대값 = 누적R/건수  (⑤)", "expectancy = round(total_r / total, 3)" in src),
+            ("SUPPORT_ZONE_PCT 0.5 (⑥)", bool(re.search(r"^SUPPORT_ZONE_PCT\s*=\s*0\.5\b",
+                                                        src, re.M))),
+        ):
+            ok = ok and good
+            print(f"    {'✅' if good else '❌'} {label}")
+        print("=" * 62)
+        return 0 if ok else 1
+
+    zone = getattr(backtest, "SUPPORT_ZONE_PCT", None)
+    gate = getattr(backtest, "MIN_TRADES_TO_TRUST", None)
+    has_px = hasattr(backtest, "round_px")
+
+    print(f"\n  backtest.__file__      {getattr(backtest, '__file__', '?')}")
+    for label, got, want in (
+        ("round_px 정의   (③)", has_px, True),
+        ("MIN_TRADES_TO_TRUST (④)", gate, 30),
+        ("SUPPORT_ZONE_PCT    (⑥)", zone, 0.5),
+    ):
+        good = got == want
+        ok = ok and good
+        print(f"  {'✅' if good else '❌'} {label}  {got!r}"
+              + ("" if good else f"   (기대: {want!r})"))
+
+    try:
+        import inspect
+        src = inspect.getsource(backtest.calc_stats)
+        good = "total_r / total" in src and "win_rate/100 * avg_win" not in src
+        ok = ok and good
+        print(f"  {'✅' if good else '❌'} 기대값 = 누적R/건수    (⑤)")
+    except Exception:
+        print("  ⚠️ calc_stats 소스를 못 읽었습니다 (⑤)")
+
+    # 같은 이름의 사본이 여러 개면 어느 걸 불렀는지가 문제가 된다.
+    here = os.path.dirname(os.path.abspath(getattr(backtest, "__file__", ".")))
+    dupes = []
+    for root, dirs, files in os.walk(os.getcwd()):
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", ".venv", "venv")]
+        if "backtest.py" in files:
+            p = os.path.abspath(os.path.join(root, "backtest.py"))
+            if os.path.dirname(p) != here:
+                dupes.append(p)
+    if dupes:
+        print("\n  ⚠️ backtest.py 사본이 더 있습니다 — 봇이 이쪽을 쓸 수 있습니다:")
+        for p in dupes:
+            print(f"      {p}")
+
+    print("=" * 62)
+    if ok:
+        print("""  로드되는 코드에 수정이 모두 반영돼 있습니다.
+
+  리포트가 그래도 안 바뀌면 남은 원인은 하나입니다 — 돌아가던 봇
+  프로세스가 옛 코드를 메모리에 들고 있는 것입니다. 봇을 껐다 켜십시오.""")
+    else:
+        print("  ❌ 표가 붙은 항목이 반영돼 있지 않습니다.")
+        print("  python fix_price_precision.py --apply  를 이 폴더에서 돌리십시오.")
+    return 0 if ok else 1
 
 
 def main(argv):
+    if "--verify" in argv:
+        return verify()
+
     apply = "--apply" in argv
     print("=" * 62)
     print("  가격 정밀도 · 근접 판정 기준 수정")
     print("=" * 62)
     if not apply:
-        print("\n  미리보기입니다. 실제로 바꾸려면 --apply 를 붙이십시오.\n")
+        print("\n  미리보기입니다. 실제로 바꾸려면 --apply 를 붙이십시오.")
 
     ok = True
+    todo = 0
     for path, fn in (("bot.py", patch_bot), ("backtest.py", patch_backtest)):
-        r = process(path, fn, apply)
+        r, n = process(path, fn, apply)
         ok = ok and (r is not False)
+        todo += n
 
-    print("=" * 62)
+    print("\n" + "=" * 62)
     if not ok:
         print("  실패한 파일이 있습니다. 원본은 그대로입니다.")
         return 1
-    if apply:
-        print("""  적용 완료.
+    if todo:
+        print(f"  아직 적용되지 않은 수정이 {todo}건 있습니다.")
+        print("  python fix_price_precision.py --apply")
+        return 0
+    print("""  모든 수정이 적용돼 있습니다.
 
   다음에 할 일
     1. 페이퍼 기록을 비웁니다 — 지금 쌓인 9건은 버그가 만든 것입니다
          /페이퍼 리셋   (또는 paper_trades.json 삭제)
-    2. 봇을 재시작합니다
-    3. 백테스트로 표본을 즉시 확보합니다 (4주를 기다리지 않는 길)
-         python backtest.py""")
-    else:
-        print("  python fix_price_precision.py --apply  로 실제 적용")
+    2. 봇을 재시작합니다  ← 이걸 빼먹으면 옛 코드가 계속 돕니다
+    3. 실제로 반영됐는지 확인합니다
+         python fix_price_precision.py --verify
+    4. 백테스트로 표본을 즉시 확보합니다 (4주를 기다리지 않는 길)
+         python run_backtest.py""")
     return 0
 
 
