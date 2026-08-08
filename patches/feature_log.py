@@ -136,12 +136,40 @@ def price_of(coin):
     """그날 시세. 나중에 일봉과 맞춰보는 용도."""
     try:
         import backtest
-        df = backtest.get_ohlcv_history(f"{coin}/USDT", "1d", 5)
+        # 30일을 부른다. 5일처럼 짧게 부르면 backtest 의 '기간이 짧다'
+        # 경고(⑪b)가 매번 뜬다 — 실제로는 문제가 아닌데 시끄럽다.
+        df = backtest.get_ohlcv_history(f"{coin}/USDT", "1d", 30)
         if df is not None and len(df):
             return float(df["close"].iloc[-1])
     except Exception:
         pass
     return None
+
+
+def funding_via_ccxt(coins):
+    """거래소에서 직접 현재 펀딩비를 받는다.
+
+    features.get_funding_rates() 는 코인 5개만 하드코딩돼 있고, 쓰는
+    엔드포인트(Bitget mix v1)가 응답하지 않으면 통째로 빈 값이 온다.
+    실제로 30종 전부 비어서 들어왔다. ccxt 로 받으면 종목 제한이 없다.
+    """
+    out = {}
+    try:
+        import backtest
+        ex = backtest.exchange
+    except Exception:
+        return out
+    for c in coins:
+        for sym in (f"{c}/USDT:USDT", f"{c}/USDT"):
+            try:
+                r = ex.fetch_funding_rate(sym)
+                v = r.get("fundingRate")
+                if v is not None:
+                    out[c] = round(float(v) * 100, 6)   # % 로 통일
+                    break
+            except Exception:
+                continue
+    return out
 
 
 def funding_all():
@@ -218,6 +246,10 @@ def cmd_log(coins):
         return 0
 
     fm = funding_all()
+    missing_f = [c for c in todo if c not in fm]
+    if missing_f:
+        # features 쪽이 5종만 다루거나 통째로 비어 오는 일이 있다.
+        fm.update(funding_via_ccxt(missing_f))
     rows, fails = [], {}
     for c in todo:
         f, bad = collect(c, liq, fm)
@@ -309,7 +341,10 @@ def cmd_check(coin):
         print(f"liquidation.py 를 못 불렀습니다: {e}")
         return 1
     print(f"  {coin} 한 종목만 찍어 봅니다 (기록하지 않습니다)\n")
-    f, bad = collect(coin, liq, funding_all())
+    fm = funding_all()
+    if coin not in fm:
+        fm.update(funding_via_ccxt([coin]))
+    f, bad = collect(coin, liq, fm)
     f["price"] = price_of(coin)
     for k, v in f.items():
         print(f"    {k:<14} {v}")
