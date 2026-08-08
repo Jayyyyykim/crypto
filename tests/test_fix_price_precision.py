@@ -10,15 +10,14 @@
   · ③의 앵커를 못 찾아도 ④⑤⑥은 계속 진행돼야 한다
 """
 
-import importlib.util
-import os
 import unittest
 
-_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                     "patches", "fix_price_precision.py")
-_spec = importlib.util.spec_from_file_location("fix_price_precision", _PATH)
-fx = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(fx)
+try:
+    from .helpers import load_patch
+except ImportError:            # 봇 폴더에 그대로 복사된 경우
+    from helpers import load_patch
+
+fx = load_patch("fix_price_precision")
 
 
 BACKTEST_STUB = f'''"""가짜 backtest.py"""

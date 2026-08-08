@@ -1,6 +1,30 @@
-"""테스트용 합성 OHLCV 생성기."""
+"""테스트용 합성 OHLCV 생성기 + 패치 스크립트 로더."""
+
+import importlib.util
+import os
+import unittest
 
 import pandas as pd
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def load_patch(name):
+    """patches/<name>.py 를 모듈로 불러온다.
+
+    이 tests/ 폴더는 봇 폴더에 그대로 복사돼 돌아가기도 한다. 거기서는
+    패치 스크립트가 patches/ 가 아니라 봇 루트에 있거나 아예 없다.
+    못 찾으면 그 파일의 테스트만 건너뛴다 — import 단계에서 죽으면
+    나머지 테스트까지 통째로 안 돌아간다.
+    """
+    for cand in (os.path.join(_ROOT, "patches", name + ".py"),
+                 os.path.join(_ROOT, name + ".py")):
+        if os.path.exists(cand):
+            spec = importlib.util.spec_from_file_location(name, cand)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    raise unittest.SkipTest(f"{name}.py 를 찾지 못해 건너뜁니다 (패치 스크립트 전용 테스트)")
 
 
 def make_df(bars):

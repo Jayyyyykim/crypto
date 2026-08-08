@@ -7,15 +7,14 @@
   · 앵커를 하나라도 못 찾으면 조용히 넘어가지 말고 ⚠️ 로 보고해야 한다
 """
 
-import importlib.util
-import os
 import unittest
 
-_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                     "patches", "fix_signal_geometry.py")
-_spec = importlib.util.spec_from_file_location("fix_signal_geometry", _PATH)
-fx = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(fx)
+try:
+    from .helpers import load_patch
+except ImportError:            # 봇 폴더에 그대로 복사된 경우
+    from helpers import load_patch
+
+fx = load_patch("fix_signal_geometry")
 
 
 STUB = f'''import pandas as pd
