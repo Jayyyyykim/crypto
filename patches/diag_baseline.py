@@ -58,6 +58,12 @@ bt = None
 SAMPLES_PER_COIN = 60      # 방향당. 20종이면 방향당 1,200건쯤 된다.
 
 
+# 거래소가 주는 만큼 받는다. ⑪ 전에는 페이지를 안 넘겨서 730 이상이
+# 의미가 없었지만, 지금은 요청한 만큼 온다. 국면을 더 담으려면 길게
+# 잡아야 한다 — 상승장 하나·하락장 하나로는 표본이 늘 모자란다.
+MAX_DAYS = 1460
+
+
 def _load():
     global pd, bt
     if bt is not None:
@@ -212,7 +218,7 @@ def main(argv):
             days = int(al[:-1]) * 365
         elif al.endswith("d") and al[:-1].isdigit():
             days = int(al[:-1])
-    days = max(90, min(days, 730))
+    days = max(90, min(days, MAX_DAYS))
 
     coins = pick_coins(n)
     print("=" * 78)
