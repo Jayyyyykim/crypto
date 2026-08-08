@@ -71,15 +71,46 @@ def plain(html):
 
 
 def pick_coins(n):
-    for mod_name, var in (("config", "SCAN_COINS"), ("config", "PAPER_COINS")):
+    """텔레그램 /백테전체 와 **같은 목록**을 쓴다.
+
+    bot.py 는 `from spotlight import SCAN_COINS` 후 `SCAN_COINS[:n]` 을 쓴다.
+    예전엔 config 만 뒤져서 config.PAPER_COINS(5종)를 집었다 — 그래서
+    `--all 20` 을 넣어도 5종만 돌았고, 20종 결과와 비교가 안 됐다.
+    """
+    for mod_name, var in (("spotlight", "SCAN_COINS"),      # ← bot.py 와 동일
+                          ("config", "SCAN_COINS"),
+                          ("config", "PAPER_COINS"),
+                          ("config", "COINS")):
         try:
             mod = __import__(mod_name)
             v = getattr(mod, var, None)
             if isinstance(v, (list, tuple)) and v:
-                return [f"{c}/USDT" if "/" not in c else c for c in v[:n]], f"{mod_name}.{var}"
+                picked = [f"{c}/USDT" if "/" not in c else c for c in v[:n]]
+                return picked, f"{mod_name}.{var} ({len(v)}종 중)"
         except Exception:
             pass
     return [f"{c}/USDT" for c in FALLBACK_COINS[:n]], "기본 목록"
+
+
+def toggles():
+    """이 리포트가 **어느 설정으로** 나온 건지 같이 찍는다.
+
+    패치가 들어갔는지 아닌지를 결과만 보고 맞히려다 몇 번 헛돌았다.
+    리포트가 스스로 이름표를 달게 한다.
+    """
+    import backtest as bt
+    rows = [
+        ("레벨 근접 폭", getattr(bt, "SUPPORT_ZONE_PCT", "?"), 0.5, "⑥"),
+        ("표본 하한", getattr(bt, "MIN_TRADES_TO_TRUST", None), 30, "④"),
+        ("손절 ATR 배수", getattr(bt, "ATR_STOP_MULT", None), 1.5, "⑧"),
+        ("4H 정배열 요구", getattr(bt, "MID_H4_STRICT", None), False, "⑨"),
+    ]
+    out = []
+    for label, got, want, num in rows:
+        mark = "✅" if got == want else ("❌" if got is None else "⚙️")
+        shown = "미적용" if got is None else got
+        out.append(f"    {mark} {num} {label:14s} {shown}")
+    return out
 
 
 def parse_period(tokens, default_days=365):
@@ -100,6 +131,10 @@ def main(argv):
     print("=" * 62)
     print("  백테스트")
     print("=" * 62)
+    print(f"  대상 폴더: {os.getcwd()}")
+    print("  설정")
+    for line in toggles():
+        print(line)
 
     # ── 전체(여러 코인) 모드 ──
     if not args or args[0] in ("--all", "-a", "all", "전체"):
@@ -109,6 +144,9 @@ def main(argv):
         coins, src = pick_coins(n)
 
         print(f"\n  대상 {len(coins)}종 ({src}) · {days}일")
+        if len(coins) < n:
+            print(f"  ⚠️ {n}종을 요청했는데 목록에 {len(coins)}종뿐입니다."
+                  " 결과를 다른 회차와 비교할 때 주의하십시오.")
         print(f"  {', '.join(c.replace('/USDT','') for c in coins)}")
         print("\n  데이터를 받는 중입니다. 2~4분 걸립니다...\n")
         t0 = time.time()
