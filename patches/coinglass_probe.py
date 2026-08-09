@@ -57,6 +57,12 @@ import urllib.parse
 import urllib.request
 
 BASE = "https://open-api-v4.coinglass.com"
+
+# 등급별 분당 요청 한도. 넘기면 429 가 오고, 그걸 "안 되는 항목"으로
+# 오해하게 된다 — 결제 판단이 통째로 틀어진다.
+#   HOBBYIST 30/분 · STARTUP 80/분 · STANDARD 300/분 · PROFESSIONAL 1200/분
+RATE_PER_MIN = 30
+RATE_SLEEP = 60.0 / RATE_PER_MIN + 0.1
 CACHE = "coinglass_hist.jsonl"
 EXCHANGE = "Binance"
 PROBE_COINS = ("BTC", "ETH", "SOL")
@@ -103,6 +109,16 @@ def w(text, width, right=False):
     n = sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in str(text))
     pad = " " * max(0, width - n)
     return (pad + str(text)) if right else (str(text) + pad)
+
+
+def set_rate(argv):
+    """--rate 80 처럼 등급에 맞춰 올릴 수 있다. 기본은 제일 낮은 등급 기준."""
+    global RATE_PER_MIN, RATE_SLEEP
+    if "--rate" in argv:
+        i = argv.index("--rate")
+        if i + 1 < len(argv) and argv[i + 1].isdigit():
+            RATE_PER_MIN = max(1, int(argv[i + 1]))
+            RATE_SLEEP = 60.0 / RATE_PER_MIN + 0.1
 
 
 def api_key(argv):
@@ -155,7 +171,7 @@ def probe_one(name, key_name, paths, key, coin):
                 return {"path": path, "params": params, "rows": len(data),
                         "data": data, "status": status}
             last = (path, status, data)
-            time.sleep(0.35)
+            time.sleep(RATE_SLEEP)
     return {"error": last[2], "status": last[1], "path": last[0]}
 
 
@@ -172,6 +188,8 @@ def cmd_probe(key):
     print("=" * 74)
     print("  CoinGlass 확인 — 무엇이 오고 몇 년치가 오나 (결제 전 점검)")
     print("=" * 74)
+    print(f"  분당 {RATE_PER_MIN}회 기준으로 천천히 부릅니다 (요청 간 {RATE_SLEEP:.1f}초)")
+    print("  등급이 높으면  --rate 80  처럼 올리십시오. 1~2분 걸립니다.")
 
     ok, data, status = call("/api/futures/supported-coins", key, {})
     if not ok:
@@ -247,7 +265,7 @@ def fetch_series(path, params, key, coin, kname, oldest_ms):
         if oldest_ms and oldest_ts <= oldest_ms:
             break
         end = oldest_ts - 1
-        time.sleep(0.35)
+        time.sleep(RATE_SLEEP)
     return rows
 
 
@@ -320,6 +338,7 @@ def main(argv):
     except Exception:
         pass
 
+    set_rate(argv)
     key = api_key(argv)
     if not key:
         print("""API 키가 없습니다.
@@ -337,6 +356,8 @@ def main(argv):
         print("=" * 74)
         print("  CoinGlass 일봉 이력 받기")
         print("=" * 74)
+        print(f"  분당 {RATE_PER_MIN}회 기준 · 요청 간 {RATE_SLEEP:.1f}초")
+        print("  30종이면 20~40분쯤 걸립니다. 중간에 끊겨도 받은 것은 남습니다.")
         return cmd_fetch(key, pick_coins())
     return cmd_probe(key)
 
