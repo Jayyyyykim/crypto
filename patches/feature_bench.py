@@ -68,6 +68,7 @@ MIN_PER_PERIOD = 15
 PCT_WINDOW = 90            # 분위수 창 (일)
 HI_Q, LO_Q = 0.90, 0.10
 WARMUP = 150               # 지표가 익을 때까지는 진입하지 않는다
+MIN_BARS = 250             # 이보다 짧으면 진입할 날이 얼마 안 남는다
 
 
 def _load():
@@ -505,6 +506,9 @@ def split(ts, mid):
 
 # ── 실행 ─────────────────────────────────────────────────────
 
+LAST_LEN = {}          # 코인 -> 실제로 받아진 봉 수 (빠진 이유를 남긴다)
+
+
 def ohlcv(sym, coin, days):
     """시세를 받는다. 현물에 없으면 무기한 선물 표기로 다시 시도한다.
 
@@ -513,20 +517,34 @@ def ohlcv(sym, coin, days):
     ARB·SUI·TIA·SEI·RENDER·TON·PEPE·WIF. 하필 **최근 상장만**
     빠지면 남은 표본이 오래된 코인 쪽으로 기운다.
     """
-    forms = [sym, f"{coin}/USDT:USDT", f"{coin}USDT",
-             f"1000{coin}/USDT", f"1000{coin}/USDT:USDT"]
-    seen = set()
-    for s in forms:
-        if s in seen:
-            continue
-        seen.add(s)
-        try:
-            df = bt.get_ohlcv_history(s, "1d", days + 200)
-        except Exception:
-            continue
-        if df is not None and len(df) >= 200:
-            return df
-    return None
+    forms, seen = [], set()
+    for s in (sym, f"{coin}/USDT:USDT", f"{coin}USDT",
+              f"1000{coin}/USDT", f"1000{coin}/USDT:USDT"):
+        if s not in seen:
+            seen.add(s)
+            forms.append(s)
+
+    # 요청량도 낮춰 본다.
+    #
+    # 4년을 달라고 하면 상장한 지 얼마 안 된 코인은 빈손으로 온다.
+    # ARB·SUI·TIA·SEI·RENDER·PEPE·WIF 가 그랬다 — 이름이 틀린 게
+    # 아니라 **그만큼의 과거가 없는 것**이었다. 2년만 달라고 하면
+    # 온다. 짧은 이력이라도 시험대에는 올릴 수 있다.
+    best, best_n = None, 0
+    for want in (days + 200, 1000, 600, 400):
+        for s in forms:
+            try:
+                df = bt.get_ohlcv_history(s, "1d", want)
+            except Exception:
+                continue
+            n = 0 if df is None else len(df)
+            if n > best_n:
+                best, best_n = df, n
+            if n >= MIN_BARS:
+                LAST_LEN[coin] = n
+                return df
+    LAST_LEN[coin] = best_n
+    return best if best_n >= MIN_BARS else None
 
 
 def run(coins, days, cache):
@@ -541,8 +559,10 @@ def run(coins, days, cache):
             continue
         try:
             df = ohlcv(sym, coin, days)
-            if df is None or len(df) < 200:
-                failed.append(coin)
+            if df is None:
+                # 왜 빠졌는지를 남긴다. '못 받음'만으로는 이름이
+                # 틀린 건지 과거가 짧은 건지 알 수 없다.
+                failed.append(f"{coin}({LAST_LEN.get(coin, 0)}봉)")
                 continue
             d = attach(bt.compute_indicators(df), cache, coin)
         except Exception as e:
