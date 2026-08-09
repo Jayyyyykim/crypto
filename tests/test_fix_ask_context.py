@@ -27,10 +27,67 @@ fx = load_patch("fix_ask_context")
 
 
 BOT = '''import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+def quick_analysis(symbol):
+    timeframes = {"1h": "🕐1시간"}
+    results = {}
+    for tf, name in timeframes.items():
+        data = analyze_timeframe(symbol, tf)
+        if data:
+            # 핵심 필드만 추출 (토큰 절약)
+            results[name] = {
+                "trend"     : data.get("trend"),
+                "rsi"       : data.get("rsi"),
+                "price"     : data.get("price"),
+                "support"   : data.get("support"),
+                "resistance": data.get("resistance"),
+                "signal"    : data.get("signal"),
+            }
+    return results
+
+
+def build_market_brief(coins, timeout_per_coin=15):
+    market_data = {}
+    with ThreadPoolExecutor(max_workers=len(coins)) as ex:
+        futures = {ex.submit(quick_analysis, sym): sym for sym in coins}
+        for fut in as_completed(futures, timeout=timeout_per_coin * len(coins)):
+            sym = futures[fut]
+            c = sym.replace("/USDT", "")
+            try:
+                market_data[c] = fut.result(timeout=timeout_per_coin)
+            except Exception as e:
+                print(f"[build_market_brief] {c} 실패: {type(e).__name__}: {e}")
+                market_data[c] = {"error": "분석 실패"}
+    return market_data
+
+
+def handle_message(text, reply_chat_id=None):
+    tl = text.lower().strip()
+    if tl.startswith("/알림"):
+        return "알림"
+
+    elif tl.startswith("/리스크"):
+        parsed = parse_risk_command(text)
+        if not parsed:
+            return "사용법"
+        return "계산기"
+
+    elif tl in ["/리스크", "/risk", "/리스크현황"]:
+        return get_risk_report()
+    return None
 
 
 def ask_claude(user_question, market_data):
     system_prompt = """너는 봇이야.
+
+━━━ 📊 매매 철학 ━━━
+• 구조가 먼저 (주봉 → 일봉 → 4H → 1H → 15분)
+• 손익비 1:2 이상, 분할 진입, 몰빵 금지
+• BTC가 방향, 알트는 그림자
+• 비위남 시그널: 👼 천사 롱 / 😈 악마 숏 / 🟢 미드롱 / 🔴 미드숏
+• 김태욱 피보나치: 0.382 / 0.618이 핵심 진입/지지
 
 ━━━ 💰 자금흐름 ━━━
 • 펀비 +0.05%↑ → 롱 과열, 청산 위험
@@ -43,6 +100,12 @@ def ask_claude(user_question, market_data):
 
 def ask_claude_conversational(user_message, chat_id, market_data=None):
     system_prompt = """너는 봇이야.
+
+━━━ 📈 트레이딩 배경 지식 ━━━
+• 구조 우선 (주봉→일봉→4H)
+• 손익비 1:2 이상, 분할 진입, 몰빵 X
+• BTC가 방향, 알트는 그림자
+• 비위남 시그널: 👼 천사 롱 / 😈 악마 숏 / 🟢 미드롱 / 🔴 미드숏
 
 ━━━ 💰 자금흐름 ━━━
 펀비 +0.05%↑→롱 과열 / -0.05%↓→숏 과열
@@ -101,11 +164,11 @@ class TestPreview(Base):
         self.assertEqual(self.read(), before, "미리보기가 파일을 건드렸다")
         self.assertIn("적용 예정", out)
 
-    def test_all_four_sites_are_found(self):
+    def test_every_site_is_found(self):
         rc, out = self.run_fx()
-        for tag in ("⑰a", "⑰b", "⑱a", "⑱b"):
+        for tag in ("⑰a", "⑰b", "⑱a", "⑱b", "⑲a", "⑲b", "⑳", "㉑", "㉒"):
             self.assertIn(tag, out)
-        self.assertEqual(out.count("적용 예정"), 4, out)
+        self.assertEqual(out.count("적용 예정"), len(fx.SITES), out)
 
 
 class TestApply(Base):
@@ -169,7 +232,120 @@ class TestVerify(Base):
         self.run_fx("--apply")
         rc, out = self.run_fx("--verify")
         self.assertNotIn("□", out)
-        self.assertEqual(out.count("✅"), 4)
+        self.assertEqual(out.count("✅"), len(fx.SITES))
+
+
+class TestPriceRulesToo(Base):
+    """자금흐름만 고쳤더니 AI 가 이번엔 가격 구조로 진입가를 제시했다.
+
+        "$65,266~65,400 돌파 확인 후 재진입이 안전할 듯"
+
+    그 규칙도 쟀다 — 돌파롱 20일신고 -0.211R. 45가지 전부 실패.
+    특히 '비위남 4종'은 우리가 직접 잰 그 신호들이고, 미드숏은
+    무작위보다 **유의하게** 나빴다.
+    """
+
+    def test_the_four_bot_signals_are_no_longer_taught_as_signals(self):
+        self.run_fx("--apply")
+        s = self.read()
+        self.assertNotIn("• 비위남 시그널: 👼 천사 롱", s)
+        self.assertIn("비위남 4종", s)
+
+    def test_the_confirmed_loser_is_named(self):
+        """미드숏이 무작위보다 나쁘다는 건 유일하게 확정된 결과다."""
+        self.run_fx("--apply")
+        self.assertIn("-0.280R", self.read())
+
+    def test_entry_price_calls_are_forbidden(self):
+        self.run_fx("--apply")
+        s = self.read()
+        self.assertIn("진입가·손절가를 단정적으로 제시하지 마라", s)
+        self.assertIn("돌파 확인 후 진입", s)
+
+    def test_risk_math_on_a_user_plan_is_still_allowed(self):
+        """사용자가 계획을 말하면 손익비 계산은 해줘야 한다 — 그건 산수다.
+
+        전부 막으면 봇이 쓸모없어진다. 예측과 산수를 갈라야 한다.
+        """
+        self.run_fx("--apply")
+        s = self.read()
+        self.assertIn("산수지 예측이 아니다", s)
+
+    def test_risk_management_advice_is_kept(self):
+        self.run_fx("--apply")
+        self.assertIn("손익비 1:2 이상, 분할 진입, 몰빵 금지", self.read())
+
+
+class TestRealBugs(Base):
+    """프롬프트 말고 코드 쪽 — bot.py 를 읽다 찾은 것들."""
+
+    def load(self, name):
+        import importlib.util
+        import sys
+        spec = importlib.util.spec_from_file_location(name, "bot.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_risk_command_was_dead_and_now_works(self):
+        """/리스크 분기가 두 번 나오는데 앞의 startswith 가 다 먹었다.
+
+        그래서 그냥 /리스크 를 치면 현황 대신 계산기 사용법이 나오고,
+        /리스크현황 은 아예 죽어 있었다.
+        """
+        before = self.load("b_before")
+        before.parse_risk_command = lambda t: None
+        before.get_risk_report = lambda: "현황"
+        self.assertEqual(before.handle_message("/리스크"), "사용법")
+
+        self.run_fx("--apply")
+        after = self.load("b_after")
+        after.parse_risk_command = lambda t: None
+        after.get_risk_report = lambda: "현황"
+        self.assertEqual(after.handle_message("/리스크"), "현황")
+        self.assertEqual(after.handle_message("/리스크현황"), "현황")
+
+    def test_the_calculator_still_works(self):
+        self.run_fx("--apply")
+        mod = self.load("b_calc")
+        mod.parse_risk_command = lambda t: (1, 2, 3, 4, 5, 6)
+        self.assertEqual(mod.handle_message("/리스크 100000 83000 80000 10"), "계산기")
+
+    def test_null_fields_are_gone(self):
+        """analyze_timeframe 은 'price'·'signal' 칼럼을 주지 않는다.
+
+        그대로 두면 /질문 이 AI 에게 매 타임프레임마다 null 을 보낸다.
+        있는 척하는 빈칸은 없는 것보다 나쁘다.
+        """
+        before = self.load("q_before")
+        before.analyze_timeframe = lambda s, tf: {"trend": "상승", "rsi": 58,
+                                                  "current_price": 65192,
+                                                  "support": 1, "resistance": 2}
+        got = list(before.quick_analysis("BTC/USDT").values())[0]
+        self.assertIsNone(got["price"], "원본이 이미 멀쩡하면 이 패치는 필요없다")
+
+        self.run_fx("--apply")
+        after = self.load("q_after")
+        after.analyze_timeframe = before.analyze_timeframe
+        got2 = list(after.quick_analysis("BTC/USDT").values())[0]
+        self.assertEqual(got2["price"], 65192)
+        self.assertNotIn("signal", got2)
+
+    def test_question_survives_a_timeout(self):
+        """as_completed 는 반복자 자체가 TimeoutError 를 던진다.
+
+        안 잡으면 /질문 이 통째로 죽고, 사용자는 '분석 중...'만 받은 채
+        답을 영영 못 받는다.
+        """
+        import time
+        self.run_fx("--apply")
+        mod = self.load("t_after")
+        mod.quick_analysis = lambda sym: (time.sleep(1.5), {"ok": 1})[1]
+        got = mod.build_market_brief(["BTC/USDT", "ETH/USDT"], timeout_per_coin=0.2)
+        self.assertEqual(set(got), {"BTC", "ETH"})
+        for v in got.values():
+            self.assertIn("error", v)
 
 
 class TestMissingTargets(Base):
