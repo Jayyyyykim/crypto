@@ -215,7 +215,8 @@ class TestDetectScales(unittest.TestCase):
         coins = [f"C{i}" for i in range(10)]
         live = {c: {"funding": 0.00012} for c in coins}
         got = fx.detect_scales(live, self.table(coins))
-        self.assertAlmostEqual(got["funding"], 100.0)
+        self.assertEqual(got["funding"]["how"], "mul")
+        self.assertAlmostEqual(got["funding"]["k"], 100.0)
 
     def test_one_coin_at_an_extreme_is_not_rescaled(self):
         """이게 핵심이다. 한 종목만 극단이면 그건 오늘의 사건이다."""
@@ -239,6 +240,70 @@ class TestDetectScales(unittest.TestCase):
         coins = ["C0", "C1"]
         live = {c: {"funding": 0.00012} for c in coins}
         self.assertEqual(fx.detect_scales(live, self.table(coins)), {})
+
+
+class TestRatioVersusShare(unittest.TestCase):
+    """실제로 물린 것 — 10의 거듭제곱이 아니라 **비(比) vs 비율**.
+
+    과거 테이커는 buy/(buy+sell) 인 비율(0~1)인데, 봇은 buy/sell 인
+    비(比)를 준다. 매수≈매도면 비는 1.0, 비율은 0.5다. **두 배 차이라
+    거듭제곱 검사는 그냥 통과시켰다** — 초록불을 잘못 켜 줬다.
+    """
+
+    def table(self, coins):
+        # 매수비(0~1)가 0.49 언저리에 몰린 과거 분포
+        bp = fx.breakpoints([0.46 + 0.00008 * i for i in range(1000)])
+        return {c: {"taker_ratio": {"bp": bp, "n": 1000,
+                                    "from": "2021-01-01", "to": "2026-08-01"}}
+                for c in coins}
+
+    def test_share_conversion_is_found(self):
+        coins = [f"C{i}" for i in range(8)]
+        live = {c: {"taker_ratio": 1.0 + 0.01 * i} for i, c in enumerate(coins)}
+        got = fx.detect_scales(live, self.table(coins))
+        self.assertIn("taker_ratio", got, "비 vs 비율을 못 잡았다")
+        self.assertEqual(got["taker_ratio"]["how"], "share")
+
+    def test_after_conversion_the_percentile_is_sane(self):
+        coins = [f"C{i}" for i in range(8)]
+        live = {c: {"taker_ratio": 1.0 + 0.01 * i} for i, c in enumerate(coins)}
+        tab = self.table(coins)
+        sc = fx.detect_scales(live, tab)
+        ctx = fx.context("C0", live["C0"], tab, sc)
+        self.assertAlmostEqual(ctx["taker_ratio"]["value"], 0.5, places=6)
+        self.assertGreater(ctx["taker_ratio"]["pct"], 5)
+        self.assertLess(ctx["taker_ratio"]["pct"], 95)
+
+    def test_the_conversion_is_named_on_screen(self):
+        coins = [f"C{i}" for i in range(8)]
+        live = {c: {"taker_ratio": 1.0} for c in coins}
+        tab = self.table(coins)
+        sc = fx.detect_scales(live, tab)
+        ctx = fx.context("C0", live["C0"], tab, sc)
+        self.assertNotEqual(ctx["taker_ratio"]["form"], fx.IDENTITY["kind"],
+                            "무엇을 바꿨는지 화면에 안 남는다")
+
+    def test_a_value_already_in_range_is_left_alone(self):
+        coins = [f"C{i}" for i in range(8)]
+        live = {c: {"taker_ratio": 0.50} for c in coins}
+        self.assertEqual(fx.detect_scales(live, self.table(coins)), {})
+
+
+class TestOutside(unittest.TestCase):
+    """'중앙값에서 멀다'가 아니라 '과거 범위에 아예 못 들어간다'가 신호다."""
+
+    def setUp(self):
+        self.bp = fx.breakpoints([float(i) for i in range(1000)])
+
+    def test_inside_is_zero(self):
+        self.assertEqual(fx.outside(self.bp, 500.0), 0.0)
+        self.assertEqual(fx.outside(self.bp, 100.0), 0.0)
+
+    def test_far_below_is_positive(self):
+        self.assertGreater(fx.outside(self.bp, -5000.0), 0)
+
+    def test_far_above_is_positive(self):
+        self.assertGreater(fx.outside(self.bp, 50000.0), 0)
 
 
 class TestBuild(unittest.TestCase):

@@ -242,24 +242,95 @@ def rank(bp, value):
     return max(0, min(100, i))
 
 
-def scale_hint(bp, value):
-    """단위가 10의 거듭제곱만큼 어긋났나. 어긋났으면 곱할 값을 준다.
+# 표기를 맞추는 방법들.
+#
+# 10의 거듭제곱만 볼 게 아니다. 테이커가 그랬다 — 과거는
+# buy/(buy+sell) 인 비율(0~1)인데 봇은 buy/sell 인 비(比)를 준다.
+# 매수와 매도가 비슷하면 비는 1.0, 비율은 0.5다. 두 배 차이라
+# '거듭제곱 검사'는 그냥 통과시킨다. 초록불을 잘못 켜준 셈이다.
+IDENTITY = {"kind": "그대로"}
+ALT_FORMS = (
+    IDENTITY,
+    {"kind": "비→비율", "how": "share"},        # x/(1+x)
+    {"kind": "비율→비", "how": "unshare"},      # x/(1-x)
+    {"kind": "×100", "how": "mul", "k": 100.0},
+    {"kind": "×0.01", "how": "mul", "k": 0.01},
+    {"kind": "×10000", "how": "mul", "k": 10000.0},
+    {"kind": "×0.0001", "how": "mul", "k": 0.0001},
+    {"kind": "×1000", "how": "mul", "k": 1000.0},
+    {"kind": "×0.001", "how": "mul", "k": 0.001},
+)
 
-    CoinGlass 펀딩 close 가 0.01 인데 ccxt fundingRate 는 0.0001 이다.
-    그대로 비교하면 매일 '상위 0%' 가 뜬다 — 조용히 틀린다.
+
+def apply_form(form, x):
+    """표기 변환. 못 하면 None."""
+    if x is None or x != x or not form:
+        return None
+    how = form.get("how")
+    if how is None:
+        return x
+    if how == "mul":
+        return x * form["k"]
+    if how == "share":
+        return x / (1.0 + x) if x > -1 else None
+    if how == "unshare":
+        return x / (1.0 - x) if x < 1 else None
+    return x
+
+
+def _spread(bp):
+    """과거 분포의 '보통 폭'. 0 이면 중앙값 크기로 대신한다."""
+    lo, hi = bp[10], bp[90]
+    s = abs(hi - lo)
+    return s if s > 0 else (abs(bp[len(bp) // 2]) or 1.0)
+
+
+def outside(bp, value):
+    """과거 범위(1~99분위) 밖으로 얼마나 벗어났나 (폭 단위). 안이면 0.
+
+    표기가 다르다는 신호는 '중앙값에서 멀다'가 아니라 **'과거 범위
+    안에 아예 들어가지 못한다'** 이다. 테이커 1.0 은 비율 분포
+    0.45~0.55 안에 들어갈 수가 없다.
     """
-    if value is None or value != value or value == 0 or not bp:
+    if value is None or value != value:
+        return float("inf")
+    lo, hi = bp[1], bp[99]
+    if lo <= value <= hi:
+        return 0.0
+    return (lo - value if value < lo else value - hi) / _spread(bp)
+
+
+def form_score(bp, value):
+    """(범위 밖 거리, 중앙값과의 거리). 작을수록 잘 맞는다.
+
+    범위 안에 들어가는 것이 먼저고, 그 안에서 중앙에 가까운 것이 다음.
+    """
+    if value is None or value != value:
+        return (float("inf"), float("inf"))
+    return (outside(bp, value),
+            abs(value - bp[len(bp) // 2]) / _spread(bp))
+
+
+def best_form(bp, value):
+    """이 값에 가장 맞는 표기와 그 점수. **여기서 바로 쓰면 안 된다.**
+
+    값 하나로 정하면 진짜 극단값을 '표기 오류'로 지워 버린다.
+    detect_scales 가 여러 코인을 모아 보고 정한다.
+    """
+    best, best_s = IDENTITY, form_score(bp, value)
+    for form in ALT_FORMS[1:]:
+        s = form_score(bp, apply_form(form, value))
+        if s < best_s:
+            best, best_s = form, s
+    return best, best_s
+
+
+def scale_hint(bp, value):
+    """되돌림용 — 예전 이름. 곱셈 배수만 돌려준다."""
+    if not bp or value is None:
         return 1.0
-    mid = bp[len(bp) // 2]
-    typ = max(abs(mid), abs(bp[-1] - bp[0]) / 4 or abs(mid))
-    if typ <= 0:
-        return 1.0
-    ratio = abs(value) / typ
-    if 0.05 <= ratio <= 20:
-        return 1.0
-    import math
-    p = round(math.log10(typ / abs(value)))
-    return 10.0 ** p if p else 1.0
+    form, _ = best_form(bp, value)
+    return form.get("k", 1.0) if form.get("how") == "mul" else 1.0
 
 
 def detect_scales(live, table):
@@ -274,24 +345,32 @@ def detect_scales(live, table):
     """
     out = {}
     for key, *_rest in METRICS:
-        fs = []
+        picks, id_out = [], []
         for coin, f in live.items():
             ent = table.get(coin, {}).get(key)
             v = f.get(key)
-            if ent and v is not None:
-                fs.append(scale_hint(ent["bp"], v))
-        if len(fs) < 3:
+            if not ent or v is None:
+                continue
+            form, _s = best_form(ent["bp"], v)
+            picks.append(form["kind"])
+            id_out.append(outside(ent["bp"], v))
+        if len(picks) < 3:
             continue
-        fs.sort()
-        med = fs[len(fs) // 2]
-        # 과반이 같은 배수일 때만 단위로 본다.
-        if med != 1.0 and sum(1 for x in fs if x == med) * 2 > len(fs):
-            out[key] = med
+        # 두 가지가 다 맞아야 표기를 바꾼다.
+        #   ① 과반이 같은 표기를 가리킨다 (한 종목만이면 그건 사건이다)
+        #   ② '그대로'로는 대부분이 과거 범위 **밖**이다
+        # ②가 없으면 살짝 나은 표기로 갈아타면서 진짜 극단을 지운다.
+        best = max(set(picks), key=picks.count)
+        id_out.sort()
+        typical = id_out[len(id_out) // 2]
+        if (best != IDENTITY["kind"] and picks.count(best) * 2 > len(picks)
+                and typical > 0.5):
+            out[key] = next(f for f in ALT_FORMS if f["kind"] == best)
     return out
 
 
 def context(coin, values, table=None, scales=None):
-    """{키: {값, 분위, 조정배수}} — 값이 없거나 기준이 없으면 뺀다.
+    """{키: {값, 분위, 표기변환}} — 값이 없거나 기준이 없으면 뺀다.
 
     scales 는 detect_scales 가 준 것을 그대로 넘긴다. 여기서 코인마다
     따로 추측하지 않는다 — 그러면 극단값이 지워진다.
@@ -304,9 +383,15 @@ def context(coin, values, table=None, scales=None):
         ent = tab.get(key)
         if v is None or not ent:
             continue
-        f = float(sc.get(key, 1.0))
-        vv = v * f
-        out[key] = {"name": name, "value": vv, "raw": v, "scale": f,
+        form = sc.get(key) or IDENTITY
+        if isinstance(form, (int, float)):          # 예전 형식
+            form = IDENTITY if form == 1.0 else {"kind": f"×{form:g}",
+                                                 "how": "mul", "k": float(form)}
+        vv = apply_form(form, v)
+        if vv is None:
+            continue
+        out[key] = {"name": name, "value": vv, "raw": v,
+                    "form": form["kind"], "scale": form.get("k", 1.0),
                     "pct": rank(ent["bp"], vv), "n": ent["n"],
                     "from": ent["from"], "to": ent["to"]}
     return out
@@ -414,38 +499,53 @@ def cmd_units(coins, table):
     if live is None:
         return 1
     scales = detect_scales(live, table)
-    print("\n  " + w("지표", 16) + w("지금 값", 14, True)
-          + w("과거 중앙값", 14, True) + "  판정")
-    print("  " + "─" * 64)
+    # 중앙값만 보여 주면 못 잡는다. 테이커가 그랬다 — 지금 값 1.0,
+    # 과거 중앙값 0.49. 두 배 차이라 눈으로도 그냥 넘어갔다.
+    # **과거가 어디부터 어디까지인지**를 같이 보여야 벗어난 게 보인다.
+    print("\n  " + w("지표", 16) + w("지금 값", 11, True)
+          + w("과거 범위(10~90분위)", 24, True) + "  판정")
+    print("  " + "─" * 70)
     bad = []
     for key, name, _k, _h, fmt in METRICS:
-        vs, mids = [], []
+        vs, los, his = [], [], []
         for coin, f in live.items():
             ent = table.get(coin, {}).get(key)
             v = f.get(key)
             if not ent or v is None:
                 continue
             vs.append(v)
-            mids.append(ent["bp"][len(ent["bp"]) // 2])
+            los.append(ent["bp"][10])
+            his.append(ent["bp"][90])
         if not vs:
             print("  " + w(name, 16) + "지금 값 또는 기준이 없습니다")
             continue
         v = sorted(vs)[len(vs) // 2]
-        mid = sorted(mids)[len(mids) // 2]
-        f = scales.get(key, 1.0)
-        note = "맞습니다" if f == 1.0 else f"⚠️ {f:g}배로 맞춰 씁니다"
-        if f != 1.0:
-            bad.append(name)
-        print("  " + w(name, 16) + w(f"{v:.6g}", 14, True)
-              + w(f"{mid:.6g}", 14, True) + "  " + note)
-    print("  " + "─" * 64)
+        lo = sorted(los)[len(los) // 2]
+        hi = sorted(his)[len(his) // 2]
+        form = scales.get(key)
+        if form:
+            bad.append(f"{name}({form['kind']})")
+            note = f"⚠️ {form['kind']} 로 맞춰 씁니다"
+        elif not (lo <= v <= hi):
+            note = "· 범위 밖 (오늘이 특이할 수 있음)"
+        else:
+            note = "맞습니다"
+        print("  " + w(name, 16) + w(f"{v:.6g}", 11, True)
+              + w(f"{lo:.6g} ~ {hi:.6g}", 24, True) + "  " + note)
+    print("  " + "─" * 70)
     if bad:
         print(f"""
-  {', '.join(bad)} 의 단위가 다릅니다. 자동으로 맞춰 쓰지만,
-  값이 이상하면 이쪽을 먼저 의심하십시오. 예를 들어 CoinGlass 는
-  펀딩을 0.01(%)로, ccxt 는 0.0001(비율)로 줍니다 — 같은 값입니다.""")
+  표기가 다릅니다: {', '.join(bad)}
+  자동으로 맞춰 쓰지만, 값이 이상하면 이쪽을 먼저 의심하십시오.
+
+  흔한 경우
+    · 펀딩   CoinGlass 0.01(%)  vs  ccxt 0.0001(비율)
+    · 테이커 과거는 buy/(buy+sell) 인 **비율**(0~1),
+             봇은 buy/sell 인 **비**(比). 매수≈매도면 비는 1.0,
+             비율은 0.5다 — 두 배 차이라 눈으로는 잘 안 보인다.""")
     else:
         print("\n  전부 맞습니다. 그대로 비교해도 됩니다.")
+        print("  · '범위 밖'은 표기 문제가 아니라 오늘 값이 특이하다는 뜻입니다.")
     return 0
 
 
@@ -486,8 +586,8 @@ def cmd_show(coins, table):
             c = ctx.get(key)
             if not c:
                 continue
-            if c["scale"] != 1.0:
-                scaled.add(name)
+            if c["form"] != IDENTITY["kind"]:
+                scaled.add(f"{name}({c['form']})")
             print("      " + w(name, 16) + w(fmt.format(c["value"]), 12, True)
                   + "   " + say(c["pct"]))
         print()
