@@ -397,10 +397,42 @@ def context(coin, values, table=None, scales=None):
     return out
 
 
-def extremes(ctx, edge=10):
-    """상·하위 edge% 안에 든 지표 수."""
+def extremes(ctx, edge=10, skip=()):
+    """상·하위 edge% 안에 든 지표. skip 에 든 것은 세지 않는다."""
     return [k for k, c in ctx.items()
-            if c["pct"] is not None and (c["pct"] >= 100 - edge or c["pct"] <= edge)]
+            if k not in skip and c["pct"] is not None
+            and (c["pct"] >= 100 - edge or c["pct"] <= edge)]
+
+
+# 지표 하나가 종목의 이만큼을 극단이라고 하면, 그건 종목이 아니라
+# 비교가 이상한 것이다.
+MISCAL = 0.40
+
+
+def calibration(ctxs, edge=10):
+    """지표별로 '극단'이 몇 몫이나 나오나. 눈금이 맞으면 ~0.2 다.
+
+    상·하위 10%씩이니 제대로 맞으면 다섯에 하나쯤이 극단이어야 한다.
+    스물 중 열둘이 '역대 최고'면 그 지표는 종목이 특이한 게 아니라
+    **비교 자체가 안 맞는 것**이다.
+
+    실제로 테이커가 그랬다. 과거는 CoinGlass 의 **하루치** 매수/매도인데
+    봇이 주는 지금 값은 **한 시간치**다. 한 시간 매수비는 하루 매수비보다
+    훨씬 요동치니 매일 극단이 뜬다. 단위가 아니라 **시간 창**이 다르다.
+    """
+    out = {}
+    for key, *_rest in METRICS:
+        vals = [c[key]["pct"] for c in ctxs
+                if key in c and c[key]["pct"] is not None]
+        if len(vals) < 8:
+            continue
+        ext = sum(1 for p in vals if p >= 100 - edge or p <= edge)
+        out[key] = ext / len(vals)
+    return out
+
+
+def miscalibrated(cal):
+    return {k for k, v in cal.items() if v > MISCAL}
 
 
 def say(pct):
@@ -561,18 +593,25 @@ def cmd_show(coins, table):
     print("    '평소와 다르다'와 '지금 사라'는 다른 말입니다.\n")
 
     scales = detect_scales(live, table)
-    rows = []
+    built = []
     for coin in coins:
         f = live.get(coin)
         if not f:
             continue
         ctx = context(coin, f, table, scales)
         if ctx:
-            rows.append((coin, ctx, len(extremes(ctx))))
-    if not rows:
+            built.append((coin, ctx))
+    if not built:
         print("  띄울 것이 없습니다. --build 를 먼저 하셨습니까?")
         return 1
 
+    # 눈금이 안 맞는 지표는 극단 세기에서 뺀다. 안 그러면 "3개 지표가
+    # 동시에 극단" 이 깨진 지표 하나 때문에 매일 뜬다.
+    cal = calibration([c for _n, c in built])
+    bad_metric = miscalibrated(cal)
+
+    rows = [(coin, ctx, len(extremes(ctx, skip=bad_metric)))
+            for coin, ctx in built]
     rows.sort(key=lambda r: -r[2])
     scaled = set()
     for coin, ctx, n in rows:
@@ -588,8 +627,9 @@ def cmd_show(coins, table):
                 continue
             if c["form"] != IDENTITY["kind"]:
                 scaled.add(f"{name}({c['form']})")
+            tail = "   (비교 안 맞음)" if key in bad_metric else ""
             print("      " + w(name, 16) + w(fmt.format(c["value"]), 12, True)
-                  + "   " + say(c["pct"]))
+                  + "   " + say(c["pct"]) + tail)
         print()
 
     print("=" * 78)
@@ -599,8 +639,21 @@ def cmd_show(coins, table):
     else:
         print("  세 개 이상 극단인 종목은 없습니다. 평범한 날입니다.")
     if scaled:
-        print(f"  · 단위를 맞춰 쓴 지표: {', '.join(sorted(scaled))}"
-              "  (--units 로 확인)")
+        print(f"  · 표기를 맞춘 지표: {', '.join(sorted(scaled))}  (--units 로 확인)")
+
+    if bad_metric:
+        print("\n  ⚠️ 비교가 안 맞는 지표 — 극단 세기에서 뺐습니다")
+        for key, name, _k, _h, _f in METRICS:
+            if key in bad_metric:
+                print(f"      {w(name, 16)}종목의 {cal[key] * 100:.0f}% 가 극단"
+                      "  (제대로 맞으면 20% 안팎)")
+        print("""
+     지금 값과 과거가 **같은 시간 창**이 아닐 때 이렇게 됩니다.
+     예: 과거는 CoinGlass 의 하루치 매수/매도인데 봇이 주는 지금 값은
+         한 시간치. 한 시간 매수비는 하루보다 훨씬 요동칩니다.
+
+     고치려면 지금 값을 24시간치로 모아서 넣으십시오. 그때까지는
+     이 줄을 참고만 하시고, 판단에 쓰지 마십시오.""")
     return 0
 
 

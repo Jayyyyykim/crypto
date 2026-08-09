@@ -289,6 +289,43 @@ class TestRatioVersusShare(unittest.TestCase):
         self.assertEqual(fx.detect_scales(live, self.table(coins)), {})
 
 
+class TestCalibration(unittest.TestCase):
+    """스물 중 열둘이 '역대 최고'면 종목이 특이한 게 아니라 비교가 틀린 것.
+
+    실제로 테이커가 그랬다. 과거는 CoinGlass 의 **하루치** 매수/매도인데
+    봇이 주는 지금 값은 **한 시간치**다. 단위가 아니라 시간 창이 다르다.
+    거듭제곱 검사도, 비↔비율 검사도 이건 못 잡는다.
+    """
+
+    def ctxs(self, pcts):
+        return [{"taker_ratio": {"pct": p, "name": "테이커", "value": 0.5,
+                                 "raw": 0.5, "form": "그대로", "scale": 1.0,
+                                 "pct_": p, "n": 1000, "from": "", "to": ""}}
+                for p in pcts]
+
+    def test_healthy_metric_is_about_two_tenths(self):
+        pcts = list(range(0, 100, 5))          # 고르게 퍼짐
+        cal = fx.calibration(self.ctxs(pcts))
+        self.assertLess(cal["taker_ratio"], fx.MISCAL)
+        self.assertEqual(fx.miscalibrated(cal), set())
+
+    def test_everything_extreme_is_flagged(self):
+        pcts = [0, 100] * 10
+        cal = fx.calibration(self.ctxs(pcts))
+        self.assertEqual(cal["taker_ratio"], 1.0)
+        self.assertIn("taker_ratio", fx.miscalibrated(cal))
+
+    def test_too_few_coins_is_not_judged(self):
+        self.assertEqual(fx.calibration(self.ctxs([0, 100, 0])), {})
+
+    def test_broken_metric_is_excluded_from_the_headline(self):
+        """깨진 지표 하나 때문에 '3개 동시 극단'이 매일 뜨면 안 된다."""
+        ctx = {"taker_ratio": {"pct": 100}, "funding": {"pct": 50},
+               "ls_ratio": {"pct": 3}}
+        self.assertEqual(len(fx.extremes(ctx)), 2)
+        self.assertEqual(len(fx.extremes(ctx, skip={"taker_ratio"})), 1)
+
+
 class TestOutside(unittest.TestCase):
     """'중앙값에서 멀다'가 아니라 '과거 범위에 아예 못 들어간다'가 신호다."""
 
