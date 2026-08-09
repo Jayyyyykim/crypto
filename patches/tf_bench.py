@@ -301,6 +301,20 @@ def main(argv):
     if med_days < days * 0.7:
         print(f"    ⚠️ 요청의 {med_days / days * 100:.0f}% 만 왔습니다."
               " 아래 결과는 그 기간에 대한 것입니다.")
+
+    # 기간이 맞아도 **봉이 다 왔는지는 별개**다.
+    #
+    # 598일에 1,194봉이 오면 기간은 82% 채워졌지만 4시간봉으로는
+    # 3분의 1이다. 중간이 숭숭 비어 있다는 뜻이고, 그런 자료로 잰
+    # '20봉 신고가'는 20봉 신고가가 아니다. 기간만 보면 못 잡는다.
+    want_per_day = 24.0 / TF_HOURS[tf]
+    dense = med_bars / max(1, med_days * want_per_day)
+    if dense < 0.7:
+        print(f"    ⚠️ **봉이 성깁니다** — {med_days}일이면 "
+              f"{int(med_days * want_per_day):,}봉이어야 하는데 {med_bars:,}봉"
+              f" ({dense * 100:.0f}%).")
+        print("       중간이 비어 있습니다. 아래 결과는 참고만 하십시오 —"
+              " 이 자료로는 이 시간대를 확정할 수 없습니다.")
     print(f"  손절폭 중앙값 {med_w * 100:.2f}%  ·  고정비 "
           f"{round_trip_cost() * 100:.3f}%  →  **거래당 비용 {cr:.3f}R**")
 
