@@ -3,6 +3,7 @@
     set COINGLASS_API_KEY=발급받은키          (윈도우 cmd)
     python coinglass_probe.py                 # 무엇이 되고 몇 년치가 오나
     python coinglass_probe.py --fetch         # 되는 것만 일봉으로 받아 캐시
+    python coinglass_probe.py --coverage      # 받은 게 온전한가 (구독 끊기 전 점검)
 
     키를 환경변수 대신 직접 줄 수도 있습니다:
     python coinglass_probe.py --key 발급받은키
@@ -281,8 +282,12 @@ def fetch_series(path, params, key, coin, kname, oldest_ms):
             if ts in seen:
                 continue
             seen.add(ts)
-            rows.append({"coin": coin, "kind": kname, "ts": ts,
-                         "v": d.get("close", d.get("value", d.get("longShortRatio")))})
+            # 응답 레코드를 **통째로** 저장한다.
+            #
+            # 구독은 한 달이고 그 뒤엔 키가 죽는다. 지금 close 만 뽑아
+            # 두면 나중에 high/low 나 다른 칼럼이 필요해질 때 다시
+            # 결제해야 한다. 지금은 다 받아 두고 쓸 건 나중에 고른다.
+            rows.append({"coin": coin, "kind": kname, "ts": ts, "raw": d})
             got += 1
         if got == 0 or oldest_ts is None:
             break
@@ -340,6 +345,61 @@ def cmd_fetch(key, coins):
     return 0
 
 
+def cmd_coverage():
+    """받은 게 온전한지 — 구독을 끊기 전에 반드시 확인할 것."""
+    if not os.path.exists(CACHE):
+        print(f"  {CACHE} 이 없습니다. python coinglass_probe.py --fetch")
+        return 1
+    import datetime
+    agg = {}
+    bad = 0
+    with open(CACHE, encoding="utf-8") as fp:
+        for line in fp:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                bad += 1
+                continue
+            k = (r["kind"], r["coin"])
+            lo, hi, n = agg.get(k, (r["ts"], r["ts"], 0))
+            agg[k] = (min(lo, r["ts"]), max(hi, r["ts"]), n + 1)
+
+    def day(ms):
+        return datetime.datetime.utcfromtimestamp(ms / 1000).strftime("%Y-%m-%d")
+
+    print("=" * 74)
+    print("  받은 것 확인 — 구독 끊기 전에 여기가 채워졌는지 보십시오")
+    print("=" * 74)
+    kinds = sorted({k for k, _ in agg})
+    for kind in kinds:
+        rows = [(c, v) for (kd, c), v in agg.items() if kd == kind]
+        rows.sort()
+        spans = [(hi - lo) / 86_400_000 for _, (lo, hi, _) in rows]
+        total = sum(n for _, (_, _, n) in rows)
+        print(f"\n  [{kind}]  {len(rows)}종 · {total:,}줄")
+        print(f"    기간 중앙값 {sorted(spans)[len(spans)//2]:.0f}일"
+              f" (최소 {min(spans):.0f} · 최대 {max(spans):.0f})")
+        short = [c for c, (lo, hi, _) in rows if (hi - lo) / 86_400_000 < 400]
+        if short:
+            print(f"    ⚠️ 400일 미만 {len(short)}종: {', '.join(short[:10])}")
+        c0, (lo0, hi0, n0) = rows[0]
+        print(f"    예) {c0}  {day(lo0)} ~ {day(hi0)} · {n0}줄")
+    if bad:
+        print(f"\n  ⚠️ 읽을 수 없는 줄 {bad}개")
+    print("\n" + "=" * 74)
+    print("""  다 받았으면 구독을 끊어도 됩니다. 이 파일은 남습니다.
+
+  끊기 전 점검
+    · 쓰려는 항목(미결제약정·펀딩)이 위에 있는가
+    · 종목 수가 30에 가까운가
+    · 기간이 2년 이상인가
+  하나라도 아니면 --fetch 를 한 번 더 돌리십시오 (없는 것만 이어받습니다).""")
+    return 0
+
+
 def pick_coins(n=30):
     for mod_name, var in (("spotlight", "SCAN_COINS"), ("config", "SCAN_COINS"),
                           ("config", "COINS")):
@@ -385,6 +445,8 @@ def main(argv):
       python coinglass_probe.py""")
         return 1
 
+    if "--coverage" in argv:
+        return cmd_coverage()
     if "--fetch" in argv:
         print("=" * 74)
         print("  CoinGlass 일봉 이력 받기")
