@@ -82,7 +82,25 @@ class TestValueOf(unittest.TestCase):
 
     def test_zero_divisor_does_not_crash(self):
         v, _ = fx.value_of("taker", {"time": NOW, "buy": 0, "sell": 0})
-        self.assertIsNone(v)
+        self.assertIsNone(v, "거래가 아예 없으면 매수비는 정의되지 않는다")
+
+    def test_no_liquidation_is_a_value_not_a_hole(self):
+        """청산 0 은 '값이 없는 날'이 아니라 양쪽 다 안 터진 날이다.
+
+        버리면 조용한 날이 통째로 사라지고 시끄러운 날만 남는다 —
+        42,906줄이 그렇게 빠져 있었다.
+        """
+        v, _ = fx.value_of("liq", {"time": NOW,
+                                   "long_liquidation_usd": "0",
+                                   "short_liquidation_usd": "0"})
+        self.assertEqual(v, 0.0)
+
+    def test_string_numbers_are_accepted(self):
+        """CoinGlass 는 숫자를 문자열로 보내기도 한다."""
+        v, _ = fx.value_of("liq", {"time": NOW,
+                                   "long_liquidation_usd": "90",
+                                   "short_liquidation_usd": "10"})
+        self.assertAlmostEqual(v, 0.8)
 
 
 class TestRealPayloads(unittest.TestCase):

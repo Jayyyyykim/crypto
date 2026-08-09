@@ -516,6 +516,24 @@ class TestFetchCommand(unittest.TestCase):
         self.assertEqual(coins, {"BTC", "ETH"},
                          f"코인별로 안 받았다: {coins}\n{out}")
 
+    def test_a_row_without_raw_is_refetched(self):
+        """맨 처음 판은 시각만 적고 값을 안 적었다.
+
+        그 줄들이 '(이미 받음)' 으로 계속 건너뛰어져서, 시험대에서
+        BTC 가 통째로 빠진 채 22종으로 쟀다. 값이 없는 줄은 가진
+        것으로 치면 안 된다.
+        """
+        with open(fx.CACHE, "w", encoding="utf-8") as fp:
+            for i in range(5):
+                fp.write(json.dumps({"coin": "BTC", "kind": "oi",
+                                     "ts": NOW - i * DAY}) + "\n")   # raw 없음
+        install([("supported-coins", {"code": "0", "data": ["BTC"]}),
+                 ("history", series(5))])
+        rc, out = self.run_fetch(("BTC",))
+        with open(fx.CACHE, encoding="utf-8") as fp:
+            good = [json.loads(l) for l in fp if "raw" in l]
+        self.assertTrue(good, f"값 없는 줄을 가진 것으로 쳤다\n{out}")
+
     def test_resume_does_not_rewrite(self):
         install([("supported-coins", {"code": "0", "data": ["BTC"]}),
                  ("history", series(30))])

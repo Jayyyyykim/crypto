@@ -183,8 +183,11 @@ def value_of(kind, raw):
                 tot = a + b
                 return (a / tot if tot else None), f"{ca}/({ca}+{cb})"
             if kind == "liq":
+                # 청산이 0 인 날은 '값이 없는 날'이 아니라 **양쪽 다
+                # 안 터진 날**이다. 정보다. 버리면 조용한 날이 통째로
+                # 사라지고 시끄러운 날만 남는다.
                 tot = a + b
-                return ((a - b) / tot if tot else None), f"({ca}-{cb})/합"
+                return ((a - b) / tot if tot else 0.0), f"({ca}-{cb})/합"
             return (a / b if b else None), f"{ca}/{cb}"
 
     # 마지막 수단: 시각이 아닌 첫 숫자. 무엇을 썼는지 화면에 뜬다.

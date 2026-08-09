@@ -60,7 +60,7 @@ import urllib.request
 
 # 화면에 찍는다. "다시 받았나?"를 한 줄로 답할 수 있어야 한다 —
 # 파일을 몇 번씩 주고받으면서 어느 판이 도는지 몰라 20분씩 날렸다.
-VERSION = "2026-08-09f"
+VERSION = "2026-08-09g"
 
 BASE = "https://open-api-v4.coinglass.com"
 
@@ -603,6 +603,14 @@ def cmd_fetch(key, coins):
                 except (json.JSONDecodeError, ValueError, KeyError, TypeError):
                     continue
                 if ts is None:
+                    continue
+                # 값이 없는 줄은 **가진 것으로 치지 않는다.**
+                #
+                # 맨 처음 판은 응답 레코드를 저장하지 않고 시각만 적었다.
+                # 그때 받은 BTC 7,803줄이 raw=None 인 채로 남아, 그 뒤
+                # 실행마다 '(이미 받음)' 으로 건너뛰었다. 시험대에서는
+                # BTC 가 통째로 빠진 채 22종으로 쟀다.
+                if not isinstance(r.get("raw"), dict):
                     continue
                 # 예전에 다른 단위로 적힌 줄과 새로 받은 줄이 같은
                 # 시각이면 같은 것으로 본다. 안 그러면 이어받기가
