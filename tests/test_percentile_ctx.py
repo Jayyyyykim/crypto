@@ -318,6 +318,8 @@ class TestCalibration(unittest.TestCase):
     def test_too_few_coins_is_not_judged(self):
         self.assertEqual(fx.calibration(self.ctxs([0, 100, 0])), {})
 
+
+
     def test_lean_tells_one_sided_from_scattered(self):
         """원인이 둘인데 도구가 하나라고 단정하면 안 된다.
 
@@ -347,6 +349,52 @@ class TestCalibration(unittest.TestCase):
         self.assertEqual(len(fx.extremes(ctx, skip={"taker_ratio"})), 1)
 
 
+class TestFlagsCarryOver(unittest.TestCase):
+    """표본이 적으면 calibration 이 아무 말도 못 한다.
+
+    그때 조용히 '괜찮다'가 되면 봇은 못 쓰는 숫자를 극단이라고 띄운다.
+    실제로 그랬다 — /질문 답변이 '테이커 97분위'를 핵심 논거로 삼았는데
+    그 지표는 종목의 75%를 극단이라고 하는 것이었다. 봇은 4~6종만
+    보므로 스스로 판정할 수 없다. 전체 실행의 판정을 물려받아야 한다.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.old = os.getcwd()
+        os.chdir(self.dir.name)
+
+    def tearDown(self):
+        os.chdir(self.old)
+        self.dir.cleanup()
+
+    def test_saved_flags_survive_a_thin_sample(self):
+        fx.save_flags({"taker_ratio"})
+        self.assertIn("taker_ratio", fx.miscalibrated({}))
+
+    def test_no_file_means_no_flags(self):
+        self.assertEqual(fx.known_bad(), set())
+        self.assertEqual(fx.miscalibrated({}), set())
+
+    def test_current_verdict_is_unioned_not_replaced(self):
+        fx.save_flags({"taker_ratio"})
+        got = fx.miscalibrated({"funding": 0.9})
+        self.assertEqual(got, {"taker_ratio", "funding"})
+
+    def test_a_healthy_metric_stays_healthy(self):
+        fx.save_flags({"taker_ratio"})
+        self.assertNotIn("funding", fx.miscalibrated({"funding": 0.1}))
+
+    def test_corrupt_flag_file_is_ignored(self):
+        with open(fx.FLAGS, "w", encoding="utf-8") as fp:
+            fp.write("{깨진")
+        self.assertEqual(fx.known_bad(), set())
+
+    def test_five_coins_are_enough_to_judge(self):
+        """봇이 보는 4~6종에서도 판정이 나와야 한다."""
+        ctxs = [{"taker_ratio": {"pct": p}} for p in (100, 0, 100, 100, 0)]
+        cal = fx.calibration(ctxs)
+        self.assertIn("taker_ratio", cal)
+        self.assertIn("taker_ratio", fx.miscalibrated(cal))
 class TestDailyTaker(unittest.TestCase):
     """과거가 하루치면 지금 값도 하루치여야 한다.
 

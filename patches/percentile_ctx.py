@@ -464,15 +464,52 @@ def calibration(ctxs, edge=10):
     for key, *_rest in METRICS:
         vals = [c[key]["pct"] for c in ctxs
                 if key in c and c[key]["pct"] is not None]
-        if len(vals) < 8:
+        if len(vals) < MIN_FOR_CAL:
             continue
         ext = sum(1 for p in vals if p >= 100 - edge or p <= edge)
         out[key] = ext / len(vals)
     return out
 
 
+FLAGS = "percentile_flags.json"
+MIN_FOR_CAL = 5            # 이보다 적은 표본으로는 눈금을 판정하지 않는다
+
+
+def save_flags(bad):
+    """눈금이 안 맞는 지표를 파일에 남긴다.
+
+    30종을 다 본 실행만이 통계적 힘이 있다. 봇은 /질문 한 번에
+    4~6종만 보므로 스스로는 판정할 수 없다 — 그 판정을 물려받는다.
+    """
+    import datetime
+    try:
+        with open(FLAGS, "w", encoding="utf-8") as fp:
+            json.dump({"miscalibrated": sorted(bad),
+                       "at": datetime.datetime.now(
+                           datetime.timezone.utc).strftime("%Y-%m-%d %H:%M")},
+                      fp, ensure_ascii=False)
+    except OSError:
+        pass
+
+
+def known_bad(path=FLAGS):
+    """지난 전체 실행이 '못 쓴다'고 판정한 지표들."""
+    try:
+        with open(path, encoding="utf-8") as fp:
+            return set(json.load(fp).get("miscalibrated") or [])
+    except (OSError, json.JSONDecodeError, ValueError, AttributeError):
+        return set()
+
+
 def miscalibrated(cal):
-    return {k for k, v in cal.items() if v > MISCAL}
+    """지금 판정 + **지난 전체 실행의 판정**.
+
+    표본이 적으면 calibration 이 아무 말도 못 한다. 그때 조용히
+    '괜찮다'가 되면, 봇은 못 쓰는 숫자를 극단이라고 띄운다.
+    실제로 그랬다 — /질문 답변이 '테이커 97분위'를 핵심 논거로
+    삼았는데, 그 지표는 종목의 75%를 극단이라고 하는 것이었다.
+    """
+    return {k for k, v in cal.items() if v > MISCAL} | known_bad()
 
 
 def say(pct):
@@ -809,6 +846,10 @@ def cmd_show(coins, table):
     # 동시에 극단" 이 깨진 지표 하나 때문에 매일 뜬다.
     cal = calibration([c for _n, c in built])
     bad_metric = miscalibrated(cal)
+    # 30종을 다 본 이 실행의 판정을 남긴다. 봇은 /질문 한 번에
+    # 4~6종만 보므로 스스로 판정할 수 없다 — 이걸 물려받는다.
+    if len(built) >= 12:
+        save_flags(bad_metric)
 
     rows = [(coin, ctx, len(extremes(ctx, skip=bad_metric)))
             for coin, ctx in built]
