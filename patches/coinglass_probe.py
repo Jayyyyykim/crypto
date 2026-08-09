@@ -121,12 +121,36 @@ def set_rate(argv):
             RATE_SLEEP = 60.0 / RATE_PER_MIN + 0.1
 
 
+KEY_FILE = "coinglass_key.txt"
+
+
 def api_key(argv):
+    """키를 찾는 순서: --key > 환경변수 > coinglass_key.txt
+
+    환경변수는 cmd 창을 닫으면 사라져서 헷갈리기 쉽다. 메모장으로
+    파일 하나 만들어 두는 쪽이 실수가 적다.
+    """
     if "--key" in argv:
         i = argv.index("--key")
         if i + 1 < len(argv):
             return argv[i + 1].strip()
-    return (os.environ.get("COINGLASS_API_KEY") or "").strip()
+
+    env = (os.environ.get("COINGLASS_API_KEY") or "").strip()
+    if env:
+        return env
+
+    for cand in (os.path.join(os.getcwd(), KEY_FILE),
+                 os.path.join(os.path.dirname(os.path.abspath(__file__)), KEY_FILE)):
+        if os.path.exists(cand):
+            try:
+                with open(cand, encoding="utf-8-sig") as fp:   # 메모장 BOM 대비
+                    for line in fp:
+                        line = line.strip().strip('"').strip("'")
+                        if line and not line.startswith("#"):
+                            return line
+            except Exception as e:
+                print(f"  {KEY_FILE} 을 못 읽었습니다: {e}")
+    return ""
 
 
 def call(path, key, params, timeout=20):
@@ -341,15 +365,24 @@ def main(argv):
     set_rate(argv)
     key = api_key(argv)
     if not key:
-        print("""API 키가 없습니다.
+        print(f"""API 키가 없습니다. 셋 중 아무 방법이나 쓰면 됩니다.
 
-  1. https://www.coinglass.com  가입 → API 키 발급
-  2. 윈도우 cmd 에서:
-         set COINGLASS_API_KEY=발급받은키
-         python coinglass_probe.py
+  [방법 1 — 제일 쉬움] 파일에 넣기
+      메모장을 열고 키만 한 줄 붙여넣은 뒤,
+      이 폴더에 {KEY_FILE} 이라는 이름으로 저장하십시오.
+          {os.path.join(os.getcwd(), KEY_FILE)}
+      그리고 그냥:  python coinglass_probe.py
 
-     또는 한 번만 쓰려면:
-         python coinglass_probe.py --key 발급받은키""")
+      ※ 메모장 '다른 이름으로 저장' 에서 파일 형식을 '모든 파일'로
+        바꾸십시오. 안 그러면 확장자가 한 번 더 붙습니다.
+      ※ 이 파일은 남에게 보내지 마십시오. 키가 그대로 들어 있습니다.
+
+  [방법 2] 명령에 직접 붙이기 (한 번만 쓸 때)
+      python coinglass_probe.py --key 여기에키
+
+  [방법 3] 환경변수 (지금 열려 있는 cmd 창에서만 유효)
+      set COINGLASS_API_KEY=여기에키
+      python coinglass_probe.py""")
         return 1
 
     if "--fetch" in argv:

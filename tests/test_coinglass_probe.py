@@ -202,6 +202,59 @@ class TestKey(unittest.TestCase):
                 os.environ["COINGLASS_API_KEY"] = old
 
 
+class TestKeyFile(unittest.TestCase):
+    """환경변수는 창을 닫으면 사라진다. 파일 쪽이 실수가 적어 그걸 지원한다."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.old_cwd = os.getcwd()
+        self.old_env = os.environ.pop("COINGLASS_API_KEY", None)
+        os.chdir(self.dir.name)
+
+    def tearDown(self):
+        os.chdir(self.old_cwd)
+        if self.old_env is not None:
+            os.environ["COINGLASS_API_KEY"] = self.old_env
+        self.dir.cleanup()
+
+    def write(self, text, encoding="utf-8"):
+        with open(fx.KEY_FILE, "w", encoding=encoding) as fp:
+            fp.write(text)
+
+    def test_plain_key(self):
+        self.write("ABC123\n")
+        self.assertEqual(fx.api_key(["p"]), "ABC123")
+
+    def test_notepad_bom_is_stripped(self):
+        """윈도우 메모장이 UTF-8 로 저장하면 앞에 BOM 이 붙는다."""
+        self.write("ABC123\n", encoding="utf-8-sig")
+        self.assertEqual(fx.api_key(["p"]), "ABC123")
+
+    def test_quotes_and_spaces_are_stripped(self):
+        self.write('   "ABC123"   \n')
+        self.assertEqual(fx.api_key(["p"]), "ABC123")
+
+    def test_comment_lines_are_skipped(self):
+        self.write("# 내 키\nABC123\n")
+        self.assertEqual(fx.api_key(["p"]), "ABC123")
+
+    def test_flag_beats_file(self):
+        self.write("FROMFILE\n")
+        self.assertEqual(fx.api_key(["p", "--key", "FROMFLAG"]), "FROMFLAG")
+
+    def test_env_beats_file(self):
+        self.write("FROMFILE\n")
+        os.environ["COINGLASS_API_KEY"] = "FROMENV"
+        try:
+            self.assertEqual(fx.api_key(["p"]), "FROMENV")
+        finally:
+            os.environ.pop("COINGLASS_API_KEY", None)
+
+    def test_empty_file_is_no_key(self):
+        self.write("\n\n# 주석만\n")
+        self.assertEqual(fx.api_key(["p"]), "")
+
+
 class TestWidth(unittest.TestCase):
 
     def test_korean_counts_as_two(self):
