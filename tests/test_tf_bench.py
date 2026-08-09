@@ -137,8 +137,43 @@ class TestFetch(unittest.TestCase):
         self.assertIsNone(fx.fetch("BTC/USDT", "BTC", "4h", 1000))
 
 
+class TestDaysNotBars(unittest.TestCase):
+    """get_ohlcv_history 의 세 번째 인자는 **일 수**다.
+
+    여기를 봉 수로 착각해서 4시간봉 2년(4,680봉)을 '4,680일 달라'로
+    보냈다. 거래소가 못 주니 사다리 맨 아래 400일까지 떨어졌고,
+    실제로는 코인당 143일치로 쟀다. 화면에는 '2년'이라고 찍혔다.
+
+    ⑪ 과 똑같은 실수다 — 요청한 만큼 왔다고 믿은 것.
+    """
+
+    def setUp(self):
+        self.old = fx.bt
+        fx.bt = FakeBt()
+
+    def tearDown(self):
+        fx.bt = self.old
+
+    def test_first_request_is_the_day_count(self):
+        fx.fetch("BTC/USDT", "BTC", "4h", 730)
+        self.assertEqual(fx.bt.tried[0][2], 730,
+                         f"봉 수를 일 수 자리에 넣었다: {fx.bt.tried[0]}")
+
+    def test_four_hour_request_is_not_inflated_to_bar_count(self):
+        """2년 4시간봉은 4,380봉이지만 요청은 730이어야 한다."""
+        fx.fetch("BTC/USDT", "BTC", "4h", 730)
+        asked = [t[2] for t in fx.bt.tried]
+        self.assertTrue(all(a <= 730 for a in asked), asked)
+
+    def test_ladder_stays_in_day_scale(self):
+        """다 실패해도 요청값이 봉 수로 부풀지 않아야 한다."""
+        fx.bt = FakeBt(bars=0)
+        fx.fetch("BTC/USDT", "BTC", "4h", 730)
+        asked = sorted({t[2] for t in fx.bt.tried})
+        self.assertEqual(asked, [365, 400, 730], asked)
+
+
 class TestBarMath(unittest.TestCase):
-    """2년을 달라고 했는데 2개월을 받으면 결론이 틀어진다 (⑪ 과 같은 실수)."""
 
     def test_hours_per_bar(self):
         self.assertEqual(fx.TF_HOURS["4h"], 4.0)

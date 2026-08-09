@@ -109,15 +109,22 @@ def cost_in_r(width):
     return round_trip_cost() / width if width and width == width else float("nan")
 
 
-def fetch(sym, coin, tf, bars):
-    """시세를 받는다. 현물에 없으면 무기한 선물 표기로 다시 시도한다."""
+def fetch(sym, coin, tf, days):
+    """시세를 받는다. 세 번째 인자는 **일 수**다 — 봉 수가 아니다.
+
+    여기를 헷갈려서 4시간봉 2년(4,680봉)을 '4,680일 달라'로 보냈다.
+    거래소가 못 주니 사다리 맨 아래 400일까지 떨어졌고, 실제로는
+    코인당 143일치로 쟀다. 화면에는 '2년'이라고 찍혀 있었다.
+
+    ⑪ 과 똑같은 실수다 — 요청한 만큼 왔다고 믿은 것.
+    """
     forms, seen = [], set()
     for s in (sym, f"{coin}/USDT:USDT", f"{coin}USDT"):
         if s not in seen:
             seen.add(s)
             forms.append(s)
     best, best_n = None, 0
-    for want in (bars, bars // 2, MIN_BARS):
+    for want in (days, days // 2, 400):
         for s in forms:
             try:
                 df = bt.get_ohlcv_history(s, tf, want)
@@ -194,7 +201,7 @@ def sb_w(text, width, right=False):
     return (pad + str(text)) if right else (str(text) + pad)
 
 
-def run(coins, tf, bars):
+def run(coins, tf, days):
     hits = {name: [] for name, _, _ in sb.CANDIDATES}
     base = {True: [], False: []}
     failed, widths, spans = [], [], []
@@ -202,7 +209,7 @@ def run(coins, tf, bars):
     for sym in coins:
         coin = sym.replace("/USDT", "")
         try:
-            df = fetch(sym, coin, tf, bars)
+            df = fetch(sym, coin, tf, days)
             if df is None:
                 failed.append(coin)
                 continue
@@ -259,21 +266,21 @@ def main(argv):
             days = int(al[:-1]) * 365
         elif al.endswith("d") and al[:-1].isdigit():
             days = int(al[:-1])
-    bars = int(days * 24 / TF_HOURS[tf]) + 300
-    bars = min(bars, 20000)
+    want_bars = int(days * 24 / TF_HOURS[tf])
 
     print("=" * 80)
     print(f"  시간대 시험대 — {tf} 에서는 다른가")
     print("=" * 80)
     print(f"  대상 폴더: {os.getcwd()}")
-    print(f"  {len(coins)}종 × {tf} {bars:,}봉 (≈{days}일) · 후보 {len(sb.CANDIDATES)}개")
+    print(f"  {len(coins)}종 × {tf} · {days}일 요청 (≈{want_bars:,}봉)"
+          f" · 후보 {len(sb.CANDIDATES)}개")
     print("  손절 1.5×ATR · 목표 1R/2R/3R · 한 코인 동시 1개")
     print("  지표 창은 봉 수 그대로입니다 — '20봉 신고'가 "
           f"{20 * TF_HOURS[tf] / 24:.1f}일 신고가 됩니다.")
     print("\n  받는 중입니다. 일봉보다 오래 걸립니다...")
     t0 = time.time()
 
-    hits, base, failed, widths, spans = run(coins, tf, bars)
+    hits, base, failed, widths, spans = run(coins, tf, days)
     if failed:
         print(f"\n  ⚠️ 시세를 못 받아 빠짐 {len(failed)}: {', '.join(failed[:10])}")
     if not spans:
@@ -283,8 +290,17 @@ def main(argv):
     med_w = sorted(widths)[len(widths) // 2] if widths else float("nan")
     cr = cost_in_r(med_w)
     med_bars = sorted(s[2] for s in spans)[len(spans) // 2]
-    print(f"\n  실제로 받은 것: 중앙값 {med_bars:,}봉 · "
-          f"{spans[0][0]} ~ {spans[0][1]} (예: {coins[0]})")
+    # 요청한 만큼 왔는지 **화면에서 바로** 보이게 한다.
+    # ⑪ 도, 이 파일의 첫 판도, 요청한 만큼 왔다고 믿어서 틀렸다.
+    got_days = sorted(
+        (pd.Timestamp(hi) - pd.Timestamp(lo)).days for lo, hi, _ in spans)
+    med_days = got_days[len(got_days) // 2]
+    print(f"\n  실제로 받은 것: 중앙값 {med_bars:,}봉 · {med_days}일"
+          f"  (요청 {days}일 · {want_bars:,}봉)")
+    print(f"    예) {coins[0]}  {spans[0][0]} ~ {spans[0][1]} · {spans[0][2]:,}봉")
+    if med_days < days * 0.7:
+        print(f"    ⚠️ 요청의 {med_days / days * 100:.0f}% 만 왔습니다."
+              " 아래 결과는 그 기간에 대한 것입니다.")
     print(f"  손절폭 중앙값 {med_w * 100:.2f}%  ·  고정비 "
           f"{round_trip_cost() * 100:.3f}%  →  **거래당 비용 {cr:.3f}R**")
 
