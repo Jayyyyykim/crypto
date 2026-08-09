@@ -171,47 +171,71 @@ def _throttle():
     _last_call[0] = time.time()
 
 
+_TRANSIENT = ("server error", "internal", "timeout", "timed out",
+              "try again", "busy", "too many", "rate limit", "gateway")
+
+
+def _transient(msg):
+    """'지금은 안 된다'와 '원래 없다'를 가른다.
+
+    HTTP 200 에 code 는 에러이고 msg 가 "Server Error" 인 응답이 온다.
+    이건 그 코인에 데이터가 없다는 뜻이 아니라 저쪽이 잠깐 넘어진
+    것이다. 한 번에 포기하면 멀쩡한 코인을 통째로 잃는다.
+    """
+    low = str(msg).lower()
+    return any(t in low for t in _TRANSIENT)
+
+
 def call(path, key, params, timeout=20, retries=3):
     """(성공?, 데이터 또는 오류문구, HTTP 상태)
 
-    429 는 '없다'가 아니라 '지금은 말고'다. 기다렸다 다시 묻는다.
+    429 도, 200-Server Error 도 '없다'가 아니라 '지금은 말고'다.
+    기다렸다 다시 묻는다.
     """
     url = f"{BASE}{path}?{urllib.parse.urlencode(params)}"
     req = urllib.request.Request(url, headers={
         "CG-API-KEY": key,
         "accept": "application/json",
     })
+    last = ("재시도했지만 실패했습니다", 0)
     for attempt in range(retries):
         _throttle()
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 body = json.loads(r.read().decode("utf-8"))
                 status = r.status
-            break
         except urllib.error.HTTPError as e:
             try:
                 body = json.loads(e.read().decode("utf-8"))
             except Exception:
                 body = {"msg": str(e)}
             msg = body.get("msg") or body.get("message") or str(e)
-            if e.code == 429 and attempt < retries - 1:
+            if (e.code == 429 or _transient(msg)) and attempt < retries - 1:
                 time.sleep(RATE_SLEEP * (2 ** (attempt + 1)))
+                last = (msg, e.code)
                 continue
             return False, msg, e.code
         except Exception as e:
             if attempt < retries - 1:
                 time.sleep(RATE_SLEEP)
+                last = (f"{type(e).__name__}: {e}", 0)
                 continue
             return False, f"{type(e).__name__}: {e}", 0
 
-    # code 는 "0" 또는 0 이 성공
-    code = str(body.get("code", "")).strip()
-    if code not in ("0", "00000", ""):
-        return False, body.get("msg") or f"code={code}", status
-    data = body.get("data")
-    if not isinstance(data, list):
-        return False, f"data 가 리스트가 아닙니다 ({type(data).__name__})", status
-    return True, data, status
+        # code 는 "0" 또는 0 이 성공
+        code = str(body.get("code", "")).strip()
+        if code not in ("0", "00000", ""):
+            msg = body.get("msg") or f"code={code}"
+            if _transient(msg) and attempt < retries - 1:
+                time.sleep(RATE_SLEEP * (2 ** (attempt + 1)))
+                last = (msg, status)
+                continue
+            return False, msg, status
+        data = body.get("data")
+        if not isinstance(data, list):
+            return False, f"data 가 리스트가 아닙니다 ({type(data).__name__})", status
+        return True, data, status
+    return False, last[0], last[1]
 
 
 def _looks_empty(r):
@@ -222,6 +246,25 @@ def _looks_empty(r):
     그게 성공으로 찍혀 결제 판단을 흐렸다.
     """
     return "error" not in r and r.get("rows", 0) == 0
+
+
+def symbol_variants(coin, template):
+    """거래소가 실제로 쓰는 이름을 찾는다.
+
+    값이 아주 작은 코인은 1000개 묶음으로 상장한다 — Binance 에
+    PEPEUSDT 는 **없고** 1000PEPEUSDT 가 있다. 이름 하나 때문에
+    "지원하지 않는 쌍"이 뜨고 그 코인이 통째로 빠졌다.
+    """
+    if str(template).upper().endswith("USDT"):
+        forms = [f"{coin}USDT", f"1000{coin}USDT", f"1000000{coin}USDT"]
+    else:
+        forms = [coin, f"1000{coin}", f"1000000{coin}"]
+    return forms
+
+
+def _no_such_pair(msg):
+    low = str(msg).lower()
+    return "does not exist" in low or "not support" in low or "invalid symbol" in low
 
 
 def _param_sets(coin):
@@ -335,11 +378,28 @@ def cmd_probe(key):
     return 0
 
 
+# 일봉 한 종목이 이보다 많을 수는 없다 (≈22년). 넘으면 일봉이 아니다.
+MAX_ROWS = 8000
+MAX_PAGES = 60
+# 암호화폐 파생상품이 존재하기 전. 이보다 오래된 시각은 잘못 온 것이다.
+FLOOR_MS = 1_356_998_400_000        # 2013-01-01
+
+
 def fetch_series(path, params, key, coin, kname, oldest_ms):
-    """end_time 을 뒤로 밀며 끝까지 받는다."""
-    rows, end, guard, seen = [], None, 0, set()
-    while guard < 40:
-        guard += 1
+    """end_time 을 뒤로 밀며 끝까지 받는다.
+
+    **멈추는 조건이 '새 줄이 없다'이면 안 된다.** 서버가 페이지를
+    겹쳐서 주면 한 페이지가 통째로 중복일 수 있는데, 그 아래에는 아직
+    안 받은 구간이 남아 있다. 거기서 멈추면 조용히 잘린 이력을 받고
+    끝난 줄 안다 — ETH 테이커가 1761에서 끊겼다가 다시 돌리니 173줄이
+    더 나온 게 이것이다.
+
+    그래서 판단 기준을 **창이 뒤로 갔는가**로 바꾼다. 창이 안 움직이면
+    그때 멈춘다.
+    """
+    rows, end, seen = [], None, set()
+    prev_oldest = None
+    for _ in range(MAX_PAGES):
         p = dict(params)
         if end:
             p["end_time"] = end
@@ -348,8 +408,18 @@ def fetch_series(path, params, key, coin, kname, oldest_ms):
             # 조용히 0건으로 끝내면 '데이터가 없다'와 구분이 안 된다.
             return rows, f"{status} {data}"
         if not data:
-            break
-        got = 0
+            # 이력 한복판에서 빈 페이지가 오면 '여기가 끝'이 아니라
+            # 저쪽이 한 번 넘어진 것일 수 있다. 그대로 믿고 멈추면
+            # 잘린 이력을 받고 다 받은 줄 안다. 한 번 더 물어본다.
+            if rows:
+                time.sleep(RATE_SLEEP)
+                ok2, data2, _ = call(path, key, p)
+                if ok2 and data2:
+                    data = data2
+                else:
+                    break
+            else:
+                break
         oldest_ts = None
         for d in data:
             ts = d.get("time") or d.get("timestamp") or d.get("t")
@@ -366,13 +436,48 @@ def fetch_series(path, params, key, coin, kname, oldest_ms):
             # 두면 나중에 high/low 나 다른 칼럼이 필요해질 때 다시
             # 결제해야 한다. 지금은 다 받아 두고 쓸 건 나중에 고른다.
             rows.append({"coin": coin, "kind": kname, "ts": ts, "raw": d})
-            got += 1
-        if got == 0 or oldest_ts is None:
+        if oldest_ts is None:
             break
+        if prev_oldest is not None and oldest_ts >= prev_oldest:
+            break                       # 창이 더 안 밀린다 = 끝
+        prev_oldest = oldest_ts
         if oldest_ms and oldest_ts <= oldest_ms:
             break
+        if oldest_ts <= FLOOR_MS:
+            break
+        if len(rows) > MAX_ROWS:
+            return rows, (f"{len(rows):,}줄 — 일봉이 아닌 것 같습니다"
+                          f" (interval 이 안 먹었을 수 있음)")
         end = oldest_ts - 1
+    else:
+        return rows, f"{MAX_PAGES}페이지에서 끊었습니다 — 더 있을 수 있습니다"
     return rows, None
+
+
+def fetch_coin(path, base_params, key, coin, kname):
+    """한 코인 · 한 항목. 거래소 이름 표기를 바꿔 가며 시도한다.
+
+    (줄, 실패사유 또는 None, 실제로 통한 심볼)
+    """
+    params = dict(base_params)
+    if "symbol" not in params:
+        rows, why = fetch_series(path, params, key, coin, kname, None)
+        return rows, why, ""
+
+    first = None
+    for sym in symbol_variants(coin, params["symbol"]):
+        p = dict(params)
+        p["symbol"] = sym
+        rows, why = fetch_series(path, p, key, coin, kname, None)
+        if rows:
+            return rows, why, sym
+        if first is None:
+            first = (rows, why, sym)
+        # 이름 문제일 때만 다음 표기를 시도한다. 등급·한도 문제면
+        # 이름을 바꿔 봐야 똑같이 막히고 시간만 3배로 든다.
+        if not (why and _no_such_pair(why)):
+            return rows, why, sym
+    return first
 
 
 def cmd_fetch(key, coins):
@@ -412,11 +517,7 @@ def cmd_fetch(key, coins):
     with open(CACHE, "a", encoding="utf-8", newline="") as fp:
         for coin in coins:
             for name, kname, path, base_params in live:
-                params = dict(base_params)
-                if "symbol" in params:
-                    params["symbol"] = (f"{coin}USDT" if params["symbol"].endswith("USDT")
-                                        else coin)
-                rows, why = fetch_series(path, params, key, coin, kname, None)
+                rows, why, used = fetch_coin(path, base_params, key, coin, kname)
                 fresh = [r for r in rows if (r["coin"], r["kind"], r["ts"]) not in have]
                 for r in fresh:
                     fp.write(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n")
@@ -433,6 +534,8 @@ def cmd_fetch(key, coins):
                     tail = "   (이미 받음)"
                 elif not fresh:
                     tail = "   (데이터 없음)"
+                if used and not used.startswith(coin):
+                    tail = f"   [{used}]{tail}"
                 print(f"    {coin:<8}{w(name, 24)}{len(fresh):>7}{tail}")
     print(f"\n  {total}건 저장 → {CACHE}")
     if failed:
@@ -443,12 +546,21 @@ def cmd_fetch(key, coins):
 
 
 def cmd_coverage():
-    """받은 게 온전한지 — 구독을 끊기 전에 반드시 확인할 것."""
+    """받은 게 온전한지 — 구독을 끊기 전에 반드시 확인할 것.
+
+    기간만 보면 안 된다. 2년 span 인데 가운데가 뻥 뚫려 있으면
+    그 구간의 백테스트는 조용히 틀린다. **날짜를 세서 구멍을 찾는다.**
+    """
     if not os.path.exists(CACHE):
         print(f"  {CACHE} 이 없습니다. python coinglass_probe.py --fetch")
         return 1
     import datetime
-    agg = {}
+
+    def day(ms):
+        return datetime.datetime.fromtimestamp(
+            ms / 1000, datetime.timezone.utc).strftime("%Y-%m-%d")
+
+    agg = {}                      # (kind, coin) -> [lo, hi, 줄수, {날짜}]
     bad = 0
     with open(CACHE, encoding="utf-8") as fp:
         for line in fp:
@@ -457,44 +569,79 @@ def cmd_coverage():
                 continue
             try:
                 r = json.loads(line)
-            except json.JSONDecodeError:
+                ts = int(r["ts"])
+                k = (r["kind"], r["coin"])
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 bad += 1
                 continue
-            k = (r["kind"], r["coin"])
-            lo, hi, n = agg.get(k, (r["ts"], r["ts"], 0))
-            agg[k] = (min(lo, r["ts"]), max(hi, r["ts"]), n + 1)
-
-    def day(ms):
-        return datetime.datetime.fromtimestamp(
-            ms / 1000, datetime.timezone.utc).strftime("%Y-%m-%d")
+            v = agg.get(k)
+            if v is None:
+                agg[k] = [ts, ts, 1, {day(ts)}]
+            else:
+                v[0] = min(v[0], ts)
+                v[1] = max(v[1], ts)
+                v[2] += 1
+                v[3].add(day(ts))
 
     print("=" * 74)
     print("  받은 것 확인 — 구독 끊기 전에 여기가 채워졌는지 보십시오")
     print("=" * 74)
-    kinds = sorted({k for k, _ in agg})
-    for kind in kinds:
-        rows = [(c, v) for (kd, c), v in agg.items() if kd == kind]
-        rows.sort()
-        spans = [(hi - lo) / 86_400_000 for _, (lo, hi, _) in rows]
-        total = sum(n for _, (_, _, n) in rows)
+
+    verdict = []
+    for kind in sorted({k for k, _ in agg}):
+        rows = sorted((c, v) for (kd, c), v in agg.items() if kd == kind)
+        total = sum(v[2] for _, v in rows)
+        spans = sorted((v[1] - v[0]) / 86_400_000 for _, v in rows)
         print(f"\n  [{kind}]  {len(rows)}종 · {total:,}줄")
-        print(f"    기간 중앙값 {sorted(spans)[len(spans)//2]:.0f}일"
-              f" (최소 {min(spans):.0f} · 최대 {max(spans):.0f})")
-        short = [c for c, (lo, hi, _) in rows if (hi - lo) / 86_400_000 < 400]
+        print(f"    기간 중앙값 {spans[len(spans)//2]:.0f}일"
+              f" (최소 {spans[0]:.0f} · 최대 {spans[-1]:.0f})")
+
+        holey, dense, short = [], [], []
+        for c, (lo, hi, n, days) in rows:
+            want = int((hi - lo) / 86_400_000) + 1
+            miss = want - len(days)
+            if n > want * 1.5:
+                dense.append((c, n, want))
+            elif miss > max(5, want * 0.02):
+                holey.append((c, miss, want))
+            if (hi - lo) / 86_400_000 < 400:
+                short.append(c)
+
+        if dense:
+            print(f"    ⚠️ 일봉이 아닙니다 {len(dense)}종 — "
+                  + ", ".join(f"{c}({n:,}줄/{d}일)" for c, n, d in dense[:5]))
+            print("       하루에 여러 줄이 들어 있습니다. 이 항목은 쓰기 전에 "
+                  "날짜별로 접어야 합니다.")
+        if holey:
+            worst = sorted(holey, key=lambda x: -x[1])[:5]
+            print(f"    ⚠️ 중간이 빠진 종목 {len(holey)}개 — "
+                  + ", ".join(f"{c}(-{m}일)" for c, m, _ in worst))
         if short:
-            print(f"    ⚠️ 400일 미만 {len(short)}종: {', '.join(short[:10])}")
-        c0, (lo0, hi0, n0) = rows[0]
-        print(f"    예) {c0}  {day(lo0)} ~ {day(hi0)} · {n0}줄")
+            print(f"    · 400일 미만 {len(short)}종: {', '.join(short[:10])}")
+        if not dense and not holey:
+            print("    ✅ 구멍 없음")
+
+        c0, (lo0, hi0, n0, d0) = rows[0]
+        print(f"    예) {c0}  {day(lo0)} ~ {day(hi0)} · {n0:,}줄 · {len(d0):,}일")
+        verdict.append((kind, len(rows), not dense and not holey))
+
     if bad:
         print(f"\n  ⚠️ 읽을 수 없는 줄 {bad}개")
-    print("\n" + "=" * 74)
-    print("""  다 받았으면 구독을 끊어도 됩니다. 이 파일은 남습니다.
 
+    print("\n" + "=" * 74)
+    clean = [k for k, n, ok in verdict if ok and n >= 25]
+    if clean:
+        print(f"  바로 쓸 수 있는 항목: {', '.join(clean)}")
+    dirty = [k for k, n, ok in verdict if not ok or n < 25]
+    if dirty:
+        print(f"  손봐야 하는 항목: {', '.join(dirty)}")
+        print("  → --fetch 를 한 번 더 돌리십시오 (없는 것만 이어받습니다).")
+    print("""
   끊기 전 점검
-    · 쓰려는 항목(미결제약정·펀딩)이 위에 있는가
+    · 쓰려는 항목(미결제약정·펀딩)이 '구멍 없음' 인가
     · 종목 수가 30에 가까운가
     · 기간이 2년 이상인가
-  하나라도 아니면 --fetch 를 한 번 더 돌리십시오 (없는 것만 이어받습니다).""")
+  세 개 다 맞으면 구독을 끊어도 됩니다. 이 파일은 남습니다.""")
     return 0
 
 

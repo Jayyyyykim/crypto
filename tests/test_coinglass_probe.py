@@ -172,6 +172,33 @@ class TestThrottle(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(status, 429)
 
+    def test_200_server_error_is_retried(self):
+        """TON 펀딩비가 '200 Server Error' 하나로 통째로 빠졌다.
+
+        저쪽이 잠깐 넘어진 것과 그 코인에 데이터가 없는 것은 다르다.
+        """
+        seq = {"n": 0}
+
+        def flaky(req, timeout=20):
+            seq["n"] += 1
+            if seq["n"] <= 2:
+                return FakeNet._ok({"code": "50001", "msg": "Server Error"})
+            return FakeNet._ok({"code": "0", "data": [1, 2, 3]})
+        fx.urllib.request.urlopen = flaky
+        fx.time.sleep = lambda s: None
+        fx._last_call[0] = 0.0
+        ok, data, status = fx.call("/x", "K", {})
+        self.assertTrue(ok, "일시적 서버 오류를 '데이터 없음'으로 처리했다")
+        self.assertEqual(data, [1, 2, 3])
+
+    def test_permanent_error_is_not_retried(self):
+        """'지원하지 않는 쌍'은 몇 번을 물어도 같다. 재시도는 낭비다."""
+        net = install([("x", {"code": "1", "msg":
+                              "The requested pair does not exist on the exchange."})])
+        ok, msg, status = fx.call("/x", "K", {})
+        self.assertFalse(ok)
+        self.assertEqual(len(net.urls), 1, f"쓸데없이 {len(net.urls)}번 물었다")
+
 
 class TestProbe(unittest.TestCase):
 
@@ -282,6 +309,86 @@ class TestFetch(unittest.TestCase):
         self.assertEqual(rows, [])
         self.assertIsNone(why, "정말 없는 것을 오류로 찍었다")
 
+    def test_empty_page_midway_is_asked_again(self):
+        """이력 한복판의 빈 페이지를 '끝'으로 믿으면 잘린 이력을 받는다.
+
+        ETH 테이커가 1761에서 끊겼다가 재실행에서 173줄이 더 나온 게
+        이 모양이다.
+        """
+        pages = [
+            {"code": "0", "data": [{"time": NOW - i * DAY} for i in range(0, 10)]},
+            {"code": "0", "data": []},                       # 딸꾹
+            {"code": "0", "data": [{"time": NOW - i * DAY} for i in range(10, 20)]},
+            {"code": "0", "data": []},
+            {"code": "0", "data": []},
+        ]
+        seq = {"n": 0}
+
+        def serve(req, timeout=20):
+            i = min(seq["n"], len(pages) - 1)
+            seq["n"] += 1
+            return FakeNet._ok(pages[i])
+        fx.urllib.request.urlopen = serve
+        fx.time.sleep = lambda s: None
+        fx._last_call[0] = 0.0
+        rows, why = fx.fetch_series("/p", {"symbol": "BTCUSDT"}, "K", "BTC", "oi", None)
+        self.assertEqual(len(rows), 20, "빈 페이지 하나에 속아 절반만 받았다")
+        self.assertIsNone(why)
+
+    def test_non_daily_series_is_capped_and_reported(self):
+        """TON 청산이 39,999줄 왔다. 일봉이면 나올 수 없는 수다.
+
+        끝없이 받으면 시간만 버리고, 조용히 받으면 일봉인 줄 알고
+        백테스트에 넣는다.
+        """
+        hour = DAY // 24
+        seq = {"n": 0}
+
+        def serve(req, timeout=20):
+            base = seq["n"] * 1000
+            seq["n"] += 1
+            return FakeNet._ok({"code": "0", "data": [
+                {"time": NOW - (base + i) * hour} for i in range(1000)]})
+        fx.urllib.request.urlopen = serve
+        fx.time.sleep = lambda s: None
+        fx._last_call[0] = 0.0
+        rows, why = fx.fetch_series("/p", {"symbol": "TONUSDT"}, "K", "TON", "liq", None)
+        self.assertLessEqual(len(rows), fx.MAX_ROWS + 1000)
+        self.assertIn("일봉", str(why))
+
+
+class TestSymbolVariants(unittest.TestCase):
+    """Binance 에 PEPEUSDT 는 없다. 1000PEPEUSDT 가 있다.
+
+    이름 하나 때문에 PEPE 가 통째로 빠졌다.
+    """
+
+    def test_variants_include_the_1000_form(self):
+        self.assertIn("1000PEPEUSDT", fx.symbol_variants("PEPE", "BTCUSDT"))
+
+    def test_falls_back_when_pair_does_not_exist(self):
+        install([("symbol=PEPEUSDT", {"code": "1", "msg":
+                  "The requested pair does not exist on the exchange."}),
+                 ("symbol=1000PEPEUSDT", series(50))])
+        rows, why, used = fx.fetch_coin("/p", {"symbol": "BTCUSDT", "interval": "1d"},
+                                        "K", "PEPE", "oi")
+        self.assertEqual(used, "1000PEPEUSDT")
+        self.assertEqual(len(rows), 50)
+        self.assertIsNone(why)
+
+    def test_plan_error_does_not_retry_every_name(self):
+        """등급 문제면 이름을 바꿔 봐야 똑같이 막힌다. 시간만 3배로 든다."""
+        net = install([("/p", 403)])
+        fx.fetch_coin("/p", {"symbol": "BTCUSDT"}, "K", "PEPE", "oi")
+        names = {u.split("symbol=")[1].split("&")[0] for u in net.urls if "symbol=" in u}
+        self.assertEqual(names, {"PEPEUSDT"}, f"이름을 다 돌았다: {names}")
+
+    def test_normal_coin_uses_the_plain_name(self):
+        install([("history", series(20))])
+        rows, why, used = fx.fetch_coin("/history", {"symbol": "BTCUSDT"},
+                                        "K", "ETH", "oi")
+        self.assertEqual(used, "ETHUSDT")
+
 
 class TestFetchCommand(unittest.TestCase):
     """--fetch 를 통째로 돌려 본다.
@@ -386,6 +493,40 @@ class TestCoverage(unittest.TestCase):
             rc = fx.main(["coinglass_probe.py", "--coverage"])
         self.assertEqual(rc, 0, out.getvalue())
         self.assertNotIn("API 키가 없습니다", out.getvalue())
+
+    def cover(self, rows):
+        import contextlib
+        with open(fx.CACHE, "w", encoding="utf-8") as fp:
+            for r in rows:
+                fp.write(json.dumps(r) + "\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            fx.cmd_coverage()
+        return out.getvalue()
+
+    def solid(self, kind, coin, days):
+        return [{"coin": coin, "kind": kind, "ts": NOW - i * DAY, "raw": {}}
+                for i in range(days)]
+
+    def test_a_hole_in_the_middle_is_found(self):
+        """기간만 보면 2년인데 가운데가 뚫려 있으면 그 구간은 조용히 틀린다."""
+        rows = self.solid("oi", "BTC", 800)
+        kept = [r for r in rows if not (200 < (NOW - r["ts"]) // DAY < 400)]
+        out = self.cover(kept)
+        self.assertIn("중간이 빠진", out, out)
+        self.assertIn("BTC", out)
+
+    def test_complete_series_says_so(self):
+        out = self.cover(self.solid("oi", "BTC", 800))
+        self.assertIn("구멍 없음", out, out)
+
+    def test_non_daily_is_flagged(self):
+        """TON 청산이 39,999줄이었다. 하루에 여러 줄이면 일봉이 아니다."""
+        hour = DAY // 24
+        rows = [{"coin": "TON", "kind": "liq", "ts": NOW - i * hour, "raw": {}}
+                for i in range(2000)]
+        out = self.cover(rows)
+        self.assertIn("일봉이 아닙니다", out, out)
 
     def test_coverage_without_cache_explains(self):
         import contextlib
