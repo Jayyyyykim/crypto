@@ -85,6 +85,76 @@ class TestValueOf(unittest.TestCase):
         self.assertIsNone(v)
 
 
+class TestRealPayloads(unittest.TestCase):
+    """CoinGlass 가 **실제로** 보낸 레코드 (--peek 으로 확인한 것).
+
+    처음에 내가 추측한 이름은 둘 다 틀렸다. ls_ratio·top_ls 가
+    비율 대신 long_percent 를 집고 있었다 — 알파벳 순으로 그게
+    먼저였기 때문이다. 눈으로 안 봤으면 그대로 쟀을 것이다.
+    """
+
+    REAL = {
+        "funding": {"close": 0.01, "high": 0.02, "low": 0.0,
+                    "open": 0.01, "time": NOW},
+        "oi": {"close": 1546148042.0, "high": 1.6e9, "low": 1.5e9,
+               "open": 1.55e9, "time": NOW},
+        "oi_agg": {"close": 15704638406.0, "high": 1.6e10, "low": 1.5e10,
+                   "open": 1.55e10, "time": NOW},
+        "ls_ratio": {"global_account_long_percent": 58.94,
+                     "global_account_long_short_ratio": 1.4355,
+                     "global_account_short_percent": 41.06, "time": NOW},
+        "top_ls": {"time": NOW, "top_account_long_percent": 70.09,
+                   "top_account_long_short_ratio": 2.3436,
+                   "top_account_short_percent": 29.91},
+        "taker": {"taker_buy_volume_usd": 4735.0,
+                  "taker_sell_volume_usd": 5265.0, "time": NOW},
+        "liq": {"long_liquidation_usd": 1118.0,
+                "short_liquidation_usd": 882.0, "time": NOW},
+    }
+
+    def test_nothing_is_guessed(self):
+        """⚠️ 가 하나라도 남으면 그 항목은 엉뚱한 숫자로 재게 된다."""
+        guessed = []
+        for kind, raw in self.REAL.items():
+            v, col = fx.value_of(kind, raw)
+            self.assertIsNotNone(v, kind)
+            if col.endswith("?"):
+                guessed.append(f"{kind}:{col}")
+        self.assertEqual(guessed, [], f"추측으로 집은 칼럼: {guessed}")
+
+    def test_ls_ratio_is_the_ratio_not_the_percent(self):
+        v, col = fx.value_of("ls_ratio", self.REAL["ls_ratio"])
+        self.assertAlmostEqual(v, 1.4355)
+        self.assertEqual(col, "global_account_long_short_ratio")
+
+    def test_top_ls_is_the_ratio_not_the_percent(self):
+        v, col = fx.value_of("top_ls", self.REAL["top_ls"])
+        self.assertAlmostEqual(v, 2.3436)
+        self.assertEqual(col, "top_account_long_short_ratio")
+
+    def test_percent_columns_still_work_as_a_fallback(self):
+        """비율 칼럼이 사라지면 퍼센트 둘로 만들어 쓴다."""
+        raw = {k: v for k, v in self.REAL["ls_ratio"].items()
+               if "long_short_ratio" not in k}
+        v, col = fx.value_of("ls_ratio", raw)
+        self.assertAlmostEqual(v, 58.94 / 41.06, places=6)
+        self.assertFalse(col.endswith("?"), col)
+
+    def test_taker_share_is_between_zero_and_one(self):
+        v, _ = fx.value_of("taker", self.REAL["taker"])
+        self.assertAlmostEqual(v, 0.4735, places=4)
+
+    def test_liq_net_matches_what_peek_showed(self):
+        v, _ = fx.value_of("liq", self.REAL["liq"])
+        self.assertAlmostEqual(v, 0.118, places=3)
+
+    def test_oi_is_a_level_so_the_bench_must_use_change(self):
+        """1.5e9 같은 수준은 코인끼리 비교가 안 된다. 변화율로 써야 한다."""
+        v, col = fx.value_of("oi", self.REAL["oi"])
+        self.assertGreater(v, 1e9)
+        self.assertEqual(col, "close")
+
+
 class TestCache(unittest.TestCase):
 
     def setUp(self):

@@ -112,11 +112,18 @@ EXTRACT = {
                ("close", "c", "openInterest", "open_interest", "value"), None),
     "funding": ("펀딩비",
                 ("close", "c", "fundingRate", "funding_rate", "rate", "value"), None),
+    # 실제로 온 이름 (--peek 으로 확인):
+    #   global_account_long_short_ratio · global_account_long_percent
+    #   top_account_long_short_ratio    · top_account_long_percent
+    # 알파벳 순으로 long_percent 가 먼저라, 이름을 안 박아 두면
+    # 마지막 수단이 그걸 집는다. 비율이 맞다.
     "ls_ratio": ("롱숏 계정비",
-                 ("longShortRatio", "long_short_ratio", "ratio", "close", "value"),
+                 ("global_account_long_short_ratio", "longShortRatio",
+                  "long_short_ratio", "ratio", "close", "value"),
                  ("longAccount", "shortAccount")),
     "top_ls": ("상위 트레이더 롱숏",
-               ("longShortRatio", "long_short_ratio", "ratio", "close", "value"),
+               ("top_account_long_short_ratio", "top_position_long_short_ratio",
+                "longShortRatio", "long_short_ratio", "ratio", "close", "value"),
                ("longAccount", "shortAccount")),
     "taker": ("테이커 매수비",
               (), ("buy", "sell")),
@@ -129,8 +136,12 @@ PAIR_ALIASES = {
             "buyVol", "aggregated_buy_volume_usd", "long"),
     "sell": ("sell", "taker_sell_volume_usd", "takerSellVolumeUsd",
              "sellVol", "aggregated_sell_volume_usd", "short"),
-    "longAccount": ("longAccount", "long_account", "longAccountRatio", "long"),
-    "shortAccount": ("shortAccount", "short_account", "shortAccountRatio", "short"),
+    "longAccount": ("longAccount", "long_account", "longAccountRatio",
+                    "global_account_long_percent", "top_account_long_percent",
+                    "long"),
+    "shortAccount": ("shortAccount", "short_account", "shortAccountRatio",
+                     "global_account_short_percent", "top_account_short_percent",
+                     "short"),
     "longLiquidationUsd": ("longLiquidationUsd", "long_liquidation_usd", "long"),
     "shortLiquidationUsd": ("shortLiquidationUsd", "short_liquidation_usd", "short"),
 }
