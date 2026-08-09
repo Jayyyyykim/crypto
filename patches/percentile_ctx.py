@@ -5,6 +5,7 @@
     python percentile_ctx.py             # 30종 지금 상태
     python percentile_ctx.py BTC         # 한 종목만
     python percentile_ctx.py --units     # 단위가 맞는지 점검 (중요)
+    python percentile_ctx.py --taker BTC # 테이커를 24시간치로 받을 수 있나
 
 무엇을 하나
 ──────────
@@ -522,6 +523,69 @@ def live_values(coins):
     return out
 
 
+def cmd_taker(coin):
+    """테이커를 살릴 수 있나 — 24시간치로 받을 방법이 있는지 본다.
+
+    과거는 하루치인데 지금 값은 한 시간치라 매일 극단이 뜬다.
+    거래소가 하루치를 바로 주거나, 한 시간치를 24개 모아 합칠 수
+    있으면 풀린다. 추측하지 말고 **실제로 뭐가 오는지 본다.**
+    """
+    sys.path.insert(0, os.getcwd())
+    try:
+        import liquidation as liq
+    except ImportError as e:
+        print(f"  liquidation.py 를 못 불렀습니다: {e}")
+        return 1
+    symbol = f"{coin}/USDT"
+    print("=" * 74)
+    print(f"  테이커 — 무엇이 오는지 본다 ({symbol})")
+    print("=" * 74)
+
+    for period, limit in (("1h", 1), ("1d", 1), ("4h", 1), ("1h", 24)):
+        print(f"\n  period={period!r} limit={limit}")
+        try:
+            r = liq.get_taker_buy_sell(symbol, period=period, limit=limit)
+        except Exception as e:
+            print(f"    ❌ {type(e).__name__}: {e}")
+            continue
+        if r is None:
+            print("    (None)")
+            continue
+        if isinstance(r, dict):
+            print(f"    dict · 칼럼={list(r)[:10]}")
+            print(f"    값={ {k: r[k] for k in list(r)[:6]} }")
+        elif isinstance(r, list):
+            print(f"    list · {len(r)}개")
+            if r:
+                first = r[0]
+                print(f"    첫 원소={first if not isinstance(first, dict) else list(first)[:10]}")
+                if isinstance(first, dict):
+                    print(f"    값={ {k: first[k] for k in list(first)[:6]} }")
+                # 매수·매도 양을 찾으면 24시간치를 합쳐 본다
+                bk = next((k for k in first if "buy" in k.lower()), None)
+                sk = next((k for k in first if "sell" in k.lower()), None)
+                if bk and sk and len(r) > 1:
+                    try:
+                        b = sum(float(x[bk]) for x in r)
+                        s = sum(float(x[sk]) for x in r)
+                    except (TypeError, ValueError, KeyError):
+                        b = s = 0
+                    if b + s:
+                        print(f"    ▶ {len(r)}개를 합치면 매수비 = "
+                              f"{b / (b + s):.4f}   ({bk} / ({bk}+{sk}))")
+        else:
+            print(f"    {type(r).__name__}: {r!r}")
+
+    print("\n" + "=" * 74)
+    print("""  읽는 법
+    · period='1d' 가 되면 그걸 쓰면 됩니다 — 과거와 같은 창입니다.
+    · 안 되면 '1h × 24개'를 합친 매수비를 쓰면 됩니다. 위에 ▶ 로
+      계산해 두었습니다. 그 값이 0.5 근처면 맞는 것입니다.
+    · 둘 다 안 되면 테이커는 '비교 안 맞음'으로 두십시오.
+      틀린 극단을 띄우는 것보다 낫습니다.""")
+    return 0
+
+
 def cmd_units(coins, table):
     """현재값과 과거 분포의 크기가 맞는지 본다. **여기가 제일 위험하다.**"""
     print("=" * 74)
@@ -669,6 +733,10 @@ def main(argv):
 
     if "--build" in argv:
         return cmd_build()
+    if "--taker" in argv:
+        i = argv.index("--taker")
+        coin = argv[i + 1].upper() if i + 1 < len(argv) else "BTC"
+        return cmd_taker(coin)
 
     table = load_table()
     if not table:

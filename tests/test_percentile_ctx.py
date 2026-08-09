@@ -326,6 +326,74 @@ class TestCalibration(unittest.TestCase):
         self.assertEqual(len(fx.extremes(ctx, skip={"taker_ratio"})), 1)
 
 
+class TestTakerProbe(unittest.TestCase):
+    """--taker 는 추측하지 않고 실제로 뭐가 오는지 본다 (--peek 과 같은 수법).
+
+    이 수법이 지금까지 두 번 사람을 살렸다 — 롱숏비 칼럼 이름과
+    비 vs 비율. 화면에 안 띄우면 그대로 잘못 쟀을 것들이다.
+    """
+
+    class FakeLiq:
+        def __init__(self, shapes):
+            self.shapes = shapes
+            self.asked = []
+
+        def get_taker_buy_sell(self, symbol, period="1h", limit=1):
+            self.asked.append((period, limit))
+            if (period, limit) not in self.shapes:
+                raise ValueError(f"period {period} not supported")
+            return self.shapes[(period, limit)]
+
+    def drive(self, shapes):
+        import contextlib
+        import io as _io
+        import sys as _sys
+        import types
+        mod = types.ModuleType("liquidation")
+        fake = self.FakeLiq(shapes)
+        mod.get_taker_buy_sell = fake.get_taker_buy_sell
+        old = _sys.modules.get("liquidation")
+        _sys.modules["liquidation"] = mod
+        out = _io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                fx.cmd_taker("BTC")
+        finally:
+            if old is None:
+                _sys.modules.pop("liquidation", None)
+            else:
+                _sys.modules["liquidation"] = old
+        return out.getvalue(), fake
+
+    def test_it_tries_a_daily_period(self):
+        """하루치를 바로 주면 그게 제일 깨끗하다 — 과거와 같은 창이다."""
+        _out, fake = self.drive({("1h", 1): {"ratio": 0.89}})
+        self.assertIn(("1d", 1), fake.asked)
+
+    def test_it_sums_24_hourly_records(self):
+        rows = [{"taker_buy_volume_usd": 60, "taker_sell_volume_usd": 40}] * 24
+        out, _f = self.drive({("1h", 24): rows})
+        self.assertIn("0.6000", out, out)
+
+    def test_unsupported_period_is_reported_not_swallowed(self):
+        out, _f = self.drive({("1h", 1): {"ratio": 0.89}})
+        self.assertIn("❌", out)
+
+    def test_missing_module_does_not_crash(self):
+        import contextlib
+        import io as _io
+        import sys as _sys
+        old = _sys.modules.pop("liquidation", None)
+        out = _io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                rc = fx.cmd_taker("BTC")
+        finally:
+            if old is not None:
+                _sys.modules["liquidation"] = old
+        self.assertEqual(rc, 1)
+
+
 class TestOutside(unittest.TestCase):
     """'중앙값에서 멀다'가 아니라 '과거 범위에 아예 못 들어간다'가 신호다."""
 
