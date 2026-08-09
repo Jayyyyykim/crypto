@@ -19,8 +19,20 @@ import io
 import json
 import os
 import tempfile
+import time
 import unittest
 import urllib.error
+
+# 이 파일은 fx.time.sleep 을 무력화한다. 그런데 fx.time 은 **전역
+# time 모듈 그 자체**라, 그대로 두면 뒤에 도는 다른 테스트 파일까지
+# sleep 이 죽은 채로 돈다. 실제로 그래서 다른 파일의 타임아웃
+# 테스트가 파일 단독으로는 통과하고 전체 실행에서는 깨졌다.
+# 남의 집을 어질러 놓고 나오지 않는다.
+_REAL_SLEEP = time.sleep
+
+
+def tearDownModule():
+    time.sleep = _REAL_SLEEP
 
 try:
     from .helpers import load_patch

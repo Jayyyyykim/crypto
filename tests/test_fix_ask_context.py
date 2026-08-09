@@ -338,10 +338,12 @@ class TestRealBugs(Base):
         안 잡으면 /질문 이 통째로 죽고, 사용자는 '분석 중...'만 받은 채
         답을 영영 못 받는다.
         """
-        import time
+        import threading
         self.run_fx("--apply")
         mod = self.load("t_after")
-        mod.quick_analysis = lambda sym: (time.sleep(1.5), {"ok": 1})[1]
+        # time.sleep 을 쓰지 않는다 — 다른 테스트 파일이 그걸 무력화해
+        # 놓으면 이 테스트가 조용히 무의미해진다. Event.wait 은 안 건드린다.
+        mod.quick_analysis = lambda sym: (threading.Event().wait(1.5), {"ok": 1})[1]
         got = mod.build_market_brief(["BTC/USDT", "ETH/USDT"], timeout_per_coin=0.2)
         self.assertEqual(set(got), {"BTC", "ETH"})
         for v in got.values():
