@@ -318,6 +318,27 @@ class TestCalibration(unittest.TestCase):
     def test_too_few_coins_is_not_judged(self):
         self.assertEqual(fx.calibration(self.ctxs([0, 100, 0])), {})
 
+    def test_lean_tells_one_sided_from_scattered(self):
+        """원인이 둘인데 도구가 하나라고 단정하면 안 된다.
+
+        · 위아래로 흩어진 극단 → 비교가 깨졌다
+        · 한쪽으로만 몰린 극단 → 오늘 시장이 다 같이 쏠렸을 수 있다
+        """
+        up = self.ctxs([98, 99, 100, 97, 96, 99, 100, 98])
+        frac, side = fx.lean(up, "taker_ratio")
+        self.assertEqual(frac, 1.0)
+        self.assertEqual(side, "위")
+
+        both = self.ctxs([0, 100, 0, 100, 1, 99, 2, 98])
+        frac2, _s = fx.lean(both, "taker_ratio")
+        self.assertAlmostEqual(frac2, 0.5)
+
+    def test_lean_with_no_extremes_is_zero(self):
+        frac, side = fx.lean(self.ctxs([40, 50, 60, 45, 55, 50, 48, 52]),
+                             "taker_ratio")
+        self.assertEqual(frac, 0.0)
+        self.assertEqual(side, "")
+
     def test_broken_metric_is_excluded_from_the_headline(self):
         """깨진 지표 하나 때문에 '3개 동시 극단'이 매일 뜨면 안 된다."""
         ctx = {"taker_ratio": {"pct": 100}, "funding": {"pct": 50},

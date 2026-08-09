@@ -410,6 +410,30 @@ def extremes(ctx, edge=10, skip=()):
 MISCAL = 0.40
 
 
+def lean(ctxs, key, edge=10):
+    """극단이 **한쪽으로만** 몰렸나. 1.0 이면 전부 한쪽이다.
+
+    이걸 봐야 원인이 갈린다.
+      · 위아래로 고루 흩어져 극단이 많다 → 지금 값이 과거보다 요동친다
+        (시간 창이 다르거나 출처가 다르다). 비교가 깨진 것이다.
+      · 한쪽으로만 몰렸다 → 오늘 시장 전체가 그쪽으로 기울었을 수 있다.
+        비교는 멀쩡하고 **정말로 다 같이 극단인 날**일 수 있다.
+
+    도구가 이 둘을 구분하지 못하면서 하나라고 단정하면 안 된다.
+    """
+    hi = lo = 0
+    for c in ctxs:
+        p = c.get(key, {}).get("pct")
+        if p is None:
+            continue
+        if p >= 100 - edge:
+            hi += 1
+        elif p <= edge:
+            lo += 1
+    tot = hi + lo
+    return (max(hi, lo) / tot, "위" if hi >= lo else "아래") if tot else (0.0, "")
+
+
 def calibration(ctxs, edge=10):
     """지표별로 '극단'이 몇 몫이나 나오나. 눈금이 맞으면 ~0.2 다.
 
@@ -733,18 +757,36 @@ def cmd_show(coins, table):
         print(f"  · 표기를 맞춘 지표: {', '.join(sorted(scaled))}  (--units 로 확인)")
 
     if bad_metric:
-        print("\n  ⚠️ 비교가 안 맞는 지표 — 극단 세기에서 뺐습니다")
+        print("\n  ⚠️ 극단이 너무 많은 지표 — 극단 세기에서 뺐습니다")
+        one_sided = []
         for key, name, _k, _h, _f in METRICS:
-            if key in bad_metric:
-                print(f"      {w(name, 16)}종목의 {cal[key] * 100:.0f}% 가 극단"
-                      "  (제대로 맞으면 20% 안팎)")
+            if key not in bad_metric:
+                continue
+            side_frac, side = lean([c for _n, c in built], key)
+            tag = f" · {side_frac * 100:.0f}% 가 '{side}'쪽" if side else ""
+            print(f"      {w(name, 16)}종목의 {cal[key] * 100:.0f}% 가 극단"
+                  f"  (제대로 맞으면 20% 안팎){tag}")
+            if side_frac >= 0.8:
+                one_sided.append(name)
         print("""
-     지금 값과 과거가 **같은 시간 창**이 아닐 때 이렇게 됩니다.
-     예: 과거는 CoinGlass 의 하루치 매수/매도인데 봇이 주는 지금 값은
-         한 시간치. 한 시간 매수비는 하루보다 훨씬 요동칩니다.
+     원인이 둘 중 하나인데, 이 도구는 그 둘을 구분하지 못합니다.
 
-     고치려면 지금 값을 24시간치로 모아서 넣으십시오. 그때까지는
-     이 줄을 참고만 하시고, 판단에 쓰지 마십시오.""")
+       ① 비교가 깨졌다 — 지금 값과 과거의 출처나 시간 창이 다르다.
+          그러면 위아래로 고루 극단이 나옵니다.
+       ② 오늘 정말로 다 같이 쏠렸다 — 코인은 같이 움직입니다.
+          그러면 한쪽으로만 몰립니다.""")
+        if one_sided:
+            print(f"""
+     지금은 {', '.join(one_sided)} 가 **한쪽으로만** 몰려 있어 ②쪽에
+     가깝습니다. 다만 어느 쪽이든, 스물 중 열다섯이 극단이면 '무엇이
+     튀는가'를 가릴 수 없으므로 세기에서는 뺍니다.
+
+     ②라면 고칠 것은 비교 대상입니다 — 과거가 아니라 **오늘 다른
+     종목들**과 견주면 됩니다. 필요하면 그 화면을 붙이겠습니다.""")
+        else:
+            print("""
+     지금은 위아래로 흩어져 있어 ①쪽에 가깝습니다. 지금 값의 출처와
+     시간 창이 과거와 같은지 확인하십시오 (--taker 참고).""")
     return 0
 
 
