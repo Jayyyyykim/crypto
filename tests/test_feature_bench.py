@@ -343,6 +343,27 @@ class TestSkipDiagnostic(unittest.TestCase):
         fx.load_cache(self.path)
         self.assertEqual(fx.SKIP_SAMPLE["oi"]["one"]["coin"], "BTC")
 
+    def test_superseded_rows_are_not_reported_as_holes(self):
+        """캐시는 덧붙이기만 한다. 껍데기 줄 위에 제대로 된 줄이 얹힌다.
+
+        그러면 못 읽은 개수는 그대로인데 자료는 멀쩡하다. 구분해
+        주지 않으면 화면이 '아직 안 고쳐졌다'고 거짓말한다.
+        """
+        self.write([{"kind": "oi", "coin": "BTC", "ts": NOW, "raw": None},
+                    {"kind": "oi", "coin": "BTC", "ts": NOW, "raw": {"close": 5}}])
+        cache, _, skipped = fx.load_cache(self.path)
+        self.assertEqual(skipped["oi"], 1)
+        self.assertEqual(fx.SKIP_SAMPLE["oi"]["gone"], ["BTC"])
+        self.assertEqual(fx.SKIP_SAMPLE["oi"]["still"], [])
+        self.assertIn("BTC", cache["oi"])
+
+    def test_a_real_hole_is_still_called_a_hole(self):
+        self.write([{"kind": "oi", "coin": "ETH", "ts": NOW, "raw": {"close": 1}},
+                    {"kind": "oi", "coin": "BTC", "ts": NOW, "raw": None}])
+        fx.load_cache(self.path)
+        self.assertEqual(fx.SKIP_SAMPLE["oi"]["still"], ["BTC"])
+        self.assertEqual(fx.SKIP_SAMPLE["oi"]["gone"], [])
+
     def test_sample_resets_between_loads(self):
         self.write([{"kind": "oi", "coin": "BTC", "ts": NOW, "raw": {"close": None}}])
         fx.load_cache(self.path)

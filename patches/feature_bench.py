@@ -287,6 +287,17 @@ def load_cache(path=CACHE):
                 day[date] = (ms, v)
     for kind, coins in tmp.items():
         out[kind] = {c: {d: v for d, (_, v) in days.items()} for c, days in coins.items()}
+
+    # 못 읽은 줄이 **아직 구멍인지, 이미 메워졌는지** 갈라 둔다.
+    #
+    # 캐시는 덧붙이기만 한다. 옛날 판이 남긴 껍데기 줄은 지워지지
+    # 않고, 그 위에 제대로 된 줄이 얹힌다. 그러면 못 읽은 개수는
+    # 그대로인데 자료는 멀쩡하다. 그걸 구분해 주지 않으면 화면이
+    # "아직 안 고쳐졌다"고 거짓말한다.
+    for kind, box in SKIP_SAMPLE.items():
+        have = out.get(kind, {})
+        box["gone"] = sorted(c for c in box["coins"] if c in have)
+        box["still"] = sorted(c for c in box["coins"] if c not in have)
     return out, cols, skipped
 
 
@@ -329,17 +340,25 @@ def cmd_peek(path=CACHE):
         print("  못 읽은 줄 — 어느 종목이 빠지고 있나")
         print("=" * 78)
         for kind, box in sorted(SKIP_SAMPLE.items()):
-            top = sorted(box["coins"].items(), key=lambda x: -x[1])[:6]
-            print(f"\n  [{kind}]  {skipped.get(kind, 0):,}줄 · {box['why']}")
-            print("    " + ", ".join(f"{c} {n:,}" for c, n in top))
-            one = box["one"]
-            raw = one.get("raw")
-            print(f"    표본: ts={one.get('ts')!r}")
-            if isinstance(raw, dict):
-                print(f"          raw 칼럼={list(raw)[:8]}")
-                print(f"          raw 값={[raw[k] for k in list(raw)[:8]]}")
-            else:
-                print(f"          raw={raw!r}")
+            still, gone = box.get("still", []), box.get("gone", [])
+            head = "⚠️ 아직 구멍" if still else "· 이미 메워짐"
+            print(f"\n  [{kind}]  {skipped.get(kind, 0):,}줄 · {box['why']}  {head}")
+            if gone:
+                print(f"    이미 메워짐: {', '.join(gone[:8])}"
+                      "  — 옛날 껍데기 줄입니다. 그냥 두십시오.")
+            if still:
+                print("    ⚠️ 아직 못 쓰는 종목: "
+                      + ", ".join(f"{c} {box['coins'][c]:,}" for c in still[:6]))
+                one = box["one"]
+                raw = one.get("raw")
+                print(f"    표본: ts={one.get('ts')!r}")
+                if isinstance(raw, dict):
+                    print(f"          raw 칼럼={list(raw)[:8]}")
+                    print(f"          raw 값={[raw[k] for k in list(raw)[:8]]}")
+                else:
+                    print(f"          raw={raw!r}")
+        if not any(b.get("still") for b in SKIP_SAMPLE.values()):
+            print("\n  ✅ 구멍 없음 — 못 읽은 줄은 전부 다른 줄로 메워졌습니다.")
     return 0
 
 
