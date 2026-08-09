@@ -200,6 +200,59 @@ class TestThrottle(unittest.TestCase):
         self.assertEqual(len(net.urls), 1, f"쓸데없이 {len(net.urls)}번 물었다")
 
 
+class TestTimestampUnits(unittest.TestCase):
+    """엔드포인트마다 초·밀리초·마이크로초가 섞여 온다.
+
+    그대로 적으면 **같은 날이 다른 날로 갈린다** — 백테스트가 조용히
+    틀리는 종류의 오염이다. 윈도우에서는 --coverage 가 아예 터졌다
+    (OSError: [Errno 22] Invalid argument).
+    """
+
+    def test_seconds_become_milliseconds(self):
+        self.assertEqual(fx.to_ms(1_786_000_000), 1_786_000_000_000)
+
+    def test_milliseconds_stay(self):
+        self.assertEqual(fx.to_ms(1_786_000_000_000), 1_786_000_000_000)
+
+    def test_microseconds_are_folded(self):
+        self.assertEqual(fx.to_ms(1_786_000_000_000_000), 1_786_000_000_000)
+
+    def test_nanoseconds_are_folded(self):
+        self.assertEqual(fx.to_ms(1_786_000_000_000_000_000), 1_786_000_000_000)
+
+    def test_all_units_land_on_the_same_day(self):
+        base = 1_786_000_000
+        days = {fx.day_of(fx.to_ms(base * m))
+                for m in (1, 1000, 1_000_000, 1_000_000_000)}
+        self.assertEqual(len(days), 1, f"같은 시각이 {days} 로 갈렸다")
+
+    def test_garbage_is_none_not_a_crash(self):
+        for junk in (None, "", "abc", 0, -5, [], {}):
+            self.assertIsNone(fx.to_ms(junk), junk)
+
+    def test_day_of_never_raises(self):
+        """캐시 한 줄이 이상하다고 점검 도구 전체가 죽으면 안 된다."""
+        for junk in (10 ** 20, -(10 ** 20), float("inf")):
+            try:
+                fx.day_of(junk)
+            except Exception as e:
+                self.fail(f"{junk!r} 에서 터졌다: {type(e).__name__}: {e}")
+
+    def test_ts_of_reads_the_usual_field_names(self):
+        for k in ("time", "timestamp", "t", "ts", "createTime"):
+            self.assertEqual(fx.ts_of({k: 1_786_000_000_000}), 1_786_000_000_000, k)
+
+    def test_ts_of_skips_a_junk_field_for_a_good_one(self):
+        self.assertEqual(fx.ts_of({"time": None, "timestamp": 1_786_000_000_000}),
+                         1_786_000_000_000)
+
+    def test_fetch_normalises_what_it_writes(self):
+        """받을 때 맞춰 적어야 나중에 고칠 일이 없다."""
+        install([("/p", {"code": "0", "data": [{"time": 1_786_000_000}]})])
+        rows, why = fx.fetch_series("/p", {"symbol": "BTCUSDT"}, "K", "BTC", "oi", None)
+        self.assertEqual(rows[0]["ts"], 1_786_000_000_000)
+
+
 class TestProbe(unittest.TestCase):
 
     def test_first_working_path_wins(self):
@@ -561,6 +614,27 @@ class TestCoverage(unittest.TestCase):
                 for i in range(2000)]
         out = self.cover(rows)
         self.assertIn("일봉이 아닙니다", out, out)
+
+    def test_mixed_units_do_not_crash_and_collapse_to_one_day(self):
+        """윈도우에서 --coverage 가 여기서 터졌다.
+
+        같은 날을 초·밀리초로 적어 둔 두 줄은 **하루**로 세야 한다.
+        """
+        sec = NOW // 1000
+        rows = [{"coin": "TON", "kind": "liq", "ts": NOW, "raw": {}},
+                {"coin": "TON", "kind": "liq", "ts": sec, "raw": {}},
+                {"coin": "TON", "kind": "liq", "ts": NOW * 1000, "raw": {}}]
+        out = self.cover(rows)
+        self.assertIn("[liq]", out)
+        self.assertIn("단위가 다른 줄", out, out)
+
+    def test_a_junk_row_does_not_kill_the_report(self):
+        rows = self.solid("oi", "BTC", 40)
+        rows.append({"coin": "BTC", "kind": "oi", "ts": 10 ** 20, "raw": {}})
+        rows.append({"coin": "BTC", "kind": "oi", "ts": "안녕", "raw": {}})
+        out = self.cover(rows)
+        self.assertIn("[oi]", out, out)
+        self.assertIn("읽을 수 없는 줄", out)
 
     def test_coverage_without_cache_explains(self):
         import contextlib

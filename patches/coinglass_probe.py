@@ -60,7 +60,7 @@ import urllib.request
 
 # 화면에 찍는다. "다시 받았나?"를 한 줄로 답할 수 있어야 한다 —
 # 파일을 몇 번씩 주고받으면서 어느 판이 도는지 몰라 20분씩 날렸다.
-VERSION = "2026-08-09d"
+VERSION = "2026-08-09e"
 
 BASE = "https://open-api-v4.coinglass.com"
 
@@ -85,9 +85,13 @@ ENDPOINTS = [
         "/api/futures/open-interest/aggregated-history",
         "/api/futures/openInterest/aggregated-history",
     ]),
+    # 거래소별 펀딩이 안 되는 코인이 있다 (TON 이 그랬다: 한 경로는
+    # Server Error, 다른 경로는 404). 그럴 때는 전거래소 가중평균으로
+    # 받는다 — 심볼이 쌍이 아니라 코인이라 상장 표기를 안 탄다.
     ("펀딩비", "funding", [
         "/api/futures/funding-rate/history",
-        "/api/futures/fundingRate/ohlc-history",
+        "/api/futures/funding-rate/oi-weight-history",
+        "/api/futures/funding-rate/vol-weight-history",
     ]),
     ("롱숏 계정비", "ls_ratio", [
         "/api/futures/global-long-short-account-ratio/history",
@@ -176,6 +180,56 @@ def _throttle():
     _last_call[0] = time.time()
 
 
+def to_ms(ts):
+    """시각을 밀리초로 맞춘다.
+
+    엔드포인트마다 초·밀리초·마이크로초가 섞여 온다. 그대로 받아
+    적으면 **같은 날이 서로 다른 날로 갈린다** — 백테스트가 조용히
+    틀리는 종류의 오염이다. 윈도우에서는 변환이 아예 터진다
+    (OSError: [Errno 22] Invalid argument).
+
+    자릿수로 가른다. 초 10자리 · 밀리초 13자리 · 마이크로초 16자리 ·
+    나노초 19자리.
+    """
+    try:
+        t = int(ts)
+    except (TypeError, ValueError):
+        return None
+    if t <= 0:
+        return None
+    if t < 100_000_000_000:                  # 초
+        return t * 1000
+    if t < 100_000_000_000_000:              # 밀리초
+        return t
+    if t < 100_000_000_000_000_000:          # 마이크로초
+        return t // 1000
+    return t // 1_000_000                    # 나노초
+
+
+def day_of(ms):
+    """밀리초 → 'YYYY-MM-DD'. 못 바꾸면 None (터뜨리지 않는다).
+
+    윈도우의 fromtimestamp 는 범위를 벗어나면 OSError 를 던진다.
+    캐시 한 줄이 이상하다고 점검 도구 전체가 죽으면 안 된다.
+    """
+    import datetime
+    try:
+        return datetime.datetime.fromtimestamp(
+            ms / 1000, datetime.timezone.utc).strftime("%Y-%m-%d")
+    except (OSError, OverflowError, ValueError, TypeError):
+        return None
+
+
+def ts_of(rec):
+    """레코드에서 시각을 뽑아 밀리초로 돌려준다. 없거나 이상하면 None."""
+    for k in ("time", "timestamp", "t", "ts", "createTime"):
+        if k in rec and rec[k] is not None:
+            ms = to_ms(rec[k])
+            if ms is not None:
+                return ms
+    return None
+
+
 _TRANSIENT = ("server error", "internal", "timeout", "timed out",
               "try again", "busy", "too many", "rate limit", "gateway")
 
@@ -261,7 +315,9 @@ def symbol_variants(coin, template):
     "지원하지 않는 쌍"이 뜨고 그 코인이 통째로 빠졌다.
     """
     if str(template).upper().endswith("USDT"):
-        forms = [f"{coin}USDT", f"1000{coin}USDT", f"1000000{coin}USDT"]
+        # 마지막의 맨이름은 합산 계열용이다 — 거기서는 심볼이 쌍이
+        # 아니라 코인이다 (symbol=TON).
+        forms = [f"{coin}USDT", f"1000{coin}USDT", f"1000000{coin}USDT", coin]
     else:
         forms = [coin, f"1000{coin}", f"1000000{coin}"]
     return forms
@@ -313,13 +369,11 @@ def probe_one(name, key_name, paths, key, coin):
 
 
 def oldest(data):
-    ts = [d.get("time") or d.get("timestamp") or d.get("t") for d in data]
-    ts = [int(t) for t in ts if t]
+    ts = [ts_of(d) for d in data if isinstance(d, dict)]
+    ts = [t for t in ts if t]
     if not ts:
         return None
-    import datetime
-    return datetime.datetime.fromtimestamp(
-        min(ts) / 1000, datetime.timezone.utc).strftime("%Y-%m-%d")
+    return day_of(min(ts))
 
 
 def cmd_probe(key):
@@ -427,10 +481,11 @@ def fetch_series(path, params, key, coin, kname, oldest_ms):
                 break
         oldest_ts = None
         for d in data:
-            ts = d.get("time") or d.get("timestamp") or d.get("t")
+            if not isinstance(d, dict):
+                continue
+            ts = ts_of(d)
             if ts is None:
                 continue
-            ts = int(ts)
             oldest_ts = ts if oldest_ts is None else min(oldest_ts, ts)
             if ts in seen:
                 continue
@@ -459,15 +514,22 @@ def fetch_series(path, params, key, coin, kname, oldest_ms):
     return rows, None
 
 
-def _worth_another_try(why):
-    """다른 경로·다른 이름을 시도해 볼 가치가 있는 실패인가.
+def _bad_endpoint(why):
+    low = str(why).lower()
+    return "endpoint not found" in low or low.startswith("404")
 
-    · '없는 쌍' → 이름 표기가 다를 수 있다
-    · 'Server Error' → 그 경로가 이 코인만 못 다루는 것일 수 있다
-      (TON 펀딩비가 두 번 연속 여기서 걸렸다)
-    · 403·한도 → 등급 문제다. 뭘 바꿔도 똑같이 막히고 시간만 든다
+
+def _worth_next_path(why):
+    """이 실패가 '이 경로의 문제'인가, '어차피 다 막힌다'인가.
+
+    · Server Error·404 → 그 경로가 이 코인을 못 다루는 것. 다음 경로.
+    · '없는 쌍' → 이름을 다 돌아도 안 됐다는 뜻. 다음 경로도 볼 만하다.
+    · 403·한도 → 등급 문제다. 경로를 바꿔도 똑같이 막히고 30종 ×
+      경로수만큼 시간만 든다.
+    · None (정말 데이터가 없음) → 더 볼 것 없다.
     """
-    return bool(why) and (_no_such_pair(why) or _transient(why))
+    return bool(why) and (_transient(why) or _bad_endpoint(why)
+                          or _no_such_pair(why))
 
 
 def fetch_coin(paths, base_params, key, coin, kname):
@@ -475,7 +537,10 @@ def fetch_coin(paths, base_params, key, coin, kname):
 
     경로는 BTC 로 한 번 정하고 30종에 그대로 쓴다. 그런데 **BTC 에서
     되는 경로가 다른 코인에서는 안 될 수 있다** — TON 펀딩비가 그랬다.
-    그래서 실패하면 남은 경로 후보도 돌려 본다.
+
+    무엇을 바꿔 볼지는 실패 사유가 정한다. 이름 문제면 이름을,
+    경로 문제면 경로를 바꾼다. 아무거나 다 돌리면 등급 문제 하나에
+    30종 × 경로 × 이름만큼 시간을 버린다.
 
     (줄, 실패사유 또는 None, 실제로 통한 심볼)
     """
@@ -485,7 +550,7 @@ def fetch_coin(paths, base_params, key, coin, kname):
     syms = ([None] if "symbol" not in params
             else symbol_variants(coin, params["symbol"]))
 
-    first = None
+    first, why = None, None
     for path in paths:
         for sym in syms:
             p = dict(params)
@@ -496,8 +561,10 @@ def fetch_coin(paths, base_params, key, coin, kname):
                 return rows, why, (sym or "")
             if first is None:
                 first = (rows, why, sym or "")
-            if not _worth_another_try(why):
-                return rows, why, (sym or "")
+            if not _no_such_pair(why):
+                break            # 이름 문제가 아니면 이름을 더 돌 이유가 없다
+        if not _worth_next_path(why):
+            return [], why, ""
     return first
 
 
@@ -532,9 +599,15 @@ def cmd_fetch(key, coins):
             for line in fp:
                 try:
                     r = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
+                    ts = to_ms(r["ts"])
+                except (json.JSONDecodeError, ValueError, KeyError, TypeError):
                     continue
-                have.add((r["coin"], r["kind"], int(r["ts"])))
+                if ts is None:
+                    continue
+                # 예전에 다른 단위로 적힌 줄과 새로 받은 줄이 같은
+                # 시각이면 같은 것으로 본다. 안 그러면 이어받기가
+                # 같은 날을 한 번 더 적는다.
+                have.add((r["coin"], r["kind"], ts))
 
     total = failed = 0
     with open(CACHE, "a", encoding="utf-8", newline="") as fp:
@@ -577,14 +650,9 @@ def cmd_coverage():
     if not os.path.exists(CACHE):
         print(f"  {CACHE} 이 없습니다. python coinglass_probe.py --fetch")
         return 1
-    import datetime
-
-    def day(ms):
-        return datetime.datetime.fromtimestamp(
-            ms / 1000, datetime.timezone.utc).strftime("%Y-%m-%d")
-
+    day = day_of
     agg = {}                      # (kind, coin) -> [lo, hi, 줄수, {날짜}]
-    bad = 0
+    bad = odd_unit = 0
     with open(CACHE, encoding="utf-8") as fp:
         for line in fp:
             line = line.strip()
@@ -592,19 +660,32 @@ def cmd_coverage():
                 continue
             try:
                 r = json.loads(line)
-                ts = int(r["ts"])
+                raw = int(r["ts"])
                 k = (r["kind"], r["coin"])
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 bad += 1
                 continue
+            # 이미 적힌 줄에 초·마이크로초가 섞여 있다. 여기서 맞춰
+            # 읽지 않으면 같은 날이 다른 날로 갈리고, 윈도우에서는
+            # 날짜 변환이 터진다.
+            ts = to_ms(raw)
+            if ts is None:
+                bad += 1
+                continue
+            if ts != raw:
+                odd_unit += 1
+            d = day(ts)
+            if d is None:
+                bad += 1
+                continue
             v = agg.get(k)
             if v is None:
-                agg[k] = [ts, ts, 1, {day(ts)}]
+                agg[k] = [ts, ts, 1, {d}]
             else:
                 v[0] = min(v[0], ts)
                 v[1] = max(v[1], ts)
                 v[2] += 1
-                v[3].add(day(ts))
+                v[3].add(d)
 
     print("=" * 74)
     print(f"  받은 것 확인 — 구독 끊기 전에 여기가 채워졌는지   [{VERSION}]")
@@ -650,6 +731,9 @@ def cmd_coverage():
 
     if bad:
         print(f"\n  ⚠️ 읽을 수 없는 줄 {bad}개")
+    if odd_unit:
+        print(f"\n  · 시각 단위가 다른 줄 {odd_unit:,}개를 밀리초로 맞춰 읽었습니다"
+              " (엔드포인트마다 초·마이크로초가 섞여 옵니다)")
 
     print("\n" + "=" * 74)
     clean = [k for k, n, ok in verdict if ok and n >= 25]
