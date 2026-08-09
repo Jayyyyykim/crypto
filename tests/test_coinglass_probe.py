@@ -571,6 +571,40 @@ class TestCoverage(unittest.TestCase):
         self.assertIn("--fetch", out.getvalue())
 
 
+class TestUnknownFlags(unittest.TestCase):
+    """모르는 옵션을 조용히 무시하면, 옛날 파일이 도는 걸 알 길이 없다.
+
+    --only 가 없던 판에 --only TON 을 줬더니 그냥 30종을 20분 돌았다.
+    사용자는 '옵션이 안 먹네'가 아니라 '시킨 대로 안 되네'로 겪는다.
+    """
+
+    def test_unknown_flag_stops_and_names_the_version(self):
+        import contextlib
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ok = fx.check_flags(["p", "--fetch", "--nosuchflag"])
+        self.assertFalse(ok)
+        self.assertIn("--nosuchflag", out.getvalue())
+        self.assertIn(fx.VERSION, out.getvalue(), "어느 판인지 안 알려준다")
+
+    def test_main_refuses_rather_than_doing_the_wrong_thing(self):
+        import contextlib
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = fx.main(["p", "--fetch", "--onlyy", "TON"])
+        self.assertEqual(rc, 2, "모르는 옵션인데 그냥 돌았다")
+
+    def test_known_flags_pass(self):
+        for argv in (["p"], ["p", "--fetch"], ["p", "--coverage"],
+                     ["p", "--fetch", "--only", "TON"],
+                     ["p", "--key", "ABC", "--rate", "80", "--fetch"]):
+            self.assertTrue(fx.check_flags(argv), argv)
+
+    def test_flag_values_are_not_mistaken_for_flags(self):
+        """--key 값이 --로 시작해도 값은 값이다."""
+        self.assertTrue(fx.check_flags(["p", "--key", "--weird--key", "--fetch"]))
+
+
 class TestOnly(unittest.TestCase):
     """한 종목 확인하려고 30종 20분을 다시 도는 건 낭비다."""
 

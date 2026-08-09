@@ -58,6 +58,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+# 화면에 찍는다. "다시 받았나?"를 한 줄로 답할 수 있어야 한다 —
+# 파일을 몇 번씩 주고받으면서 어느 판이 도는지 몰라 20분씩 날렸다.
+VERSION = "2026-08-09d"
+
 BASE = "https://open-api-v4.coinglass.com"
 
 # 등급별 분당 요청 한도. 넘기면 429 가 오고, 그걸 "안 되는 항목"으로
@@ -320,7 +324,7 @@ def oldest(data):
 
 def cmd_probe(key):
     print("=" * 74)
-    print("  CoinGlass 확인 — 무엇이 오고 몇 년치가 오나 (결제 전 점검)")
+    print(f"  CoinGlass 확인 — 무엇이 오고 몇 년치가 오나   [{VERSION}]")
     print("=" * 74)
     print(f"  분당 {RATE_PER_MIN}회 기준으로 천천히 부릅니다 (요청 간 {RATE_SLEEP:.1f}초)")
     print("  등급이 높으면  --rate 80  처럼 올리십시오. 1~2분 걸립니다.")
@@ -603,7 +607,7 @@ def cmd_coverage():
                 v[3].add(day(ts))
 
     print("=" * 74)
-    print("  받은 것 확인 — 구독 끊기 전에 여기가 채워졌는지 보십시오")
+    print(f"  받은 것 확인 — 구독 끊기 전에 여기가 채워졌는지   [{VERSION}]")
     print("=" * 74)
 
     verdict = []
@@ -687,6 +691,39 @@ def pick_coins(n=30, argv=()):
     return list(PROBE_COINS)
 
 
+def check_flags(argv):
+    """모르는 옵션은 **조용히 무시하지 않는다.**
+
+    --only 가 없던 판에 --only TON 을 주면, 예전에는 그냥 무시하고
+    30종을 20분 돌았다. 사용자는 '옵션이 안 먹네' 가 아니라 '내가
+    시킨 대로 안 되네' 로 겪는다. 파일이 옛날 것이라는 사실이
+    어디에도 안 나온다.
+
+    그래서 모르는 옵션을 만나면 멈추고, 지금 이 파일의 판을 찍는다.
+    """
+    takes_value = {"--key", "--rate", "--only"}
+    known = takes_value | {"--fetch", "--coverage"}
+    skip = False
+    unknown = []
+    for a in argv[1:]:
+        if skip:
+            skip = False
+            continue
+        if a in takes_value:
+            skip = True
+            continue
+        if a.startswith("--"):
+            if a not in known:
+                unknown.append(a)
+    if unknown:
+        print(f"  모르는 옵션입니다: {', '.join(unknown)}")
+        print(f"  이 파일은 {VERSION} 판입니다.")
+        print("  옵션이 최근에 생긴 것이라면 coinglass_probe.py 를 다시 받으십시오.")
+        print(f"\n  이 판이 아는 것: {', '.join(sorted(known))}")
+        return False
+    return True
+
+
 def main(argv):
     for cand in (os.getcwd(), os.path.dirname(os.path.abspath(__file__))):
         if cand not in sys.path:
@@ -696,6 +733,9 @@ def main(argv):
         console.enable_utf8()
     except Exception:
         pass
+
+    if not check_flags(argv):
+        return 2
 
     set_rate(argv)
 
@@ -729,7 +769,7 @@ def main(argv):
     if "--fetch" in argv:
         coins = pick_coins(argv=argv)
         print("=" * 74)
-        print("  CoinGlass 일봉 이력 받기")
+        print(f"  CoinGlass 일봉 이력 받기   [{VERSION}]")
         print("=" * 74)
         print(f"  분당 {RATE_PER_MIN}회 기준 · 요청 간 {RATE_SLEEP:.1f}초")
         if len(coins) <= 5:
