@@ -225,6 +225,21 @@ def build(path=CACHE):
 
 # ── 조회 ─────────────────────────────────────────────────────
 
+_CACHE = {}
+
+
+def table_once(path=TABLE):
+    """봇이 매번 부르므로 한 번만 읽는다. 파일이 바뀌면 다시 읽는다."""
+    try:
+        stamp = os.path.getmtime(path)
+    except OSError:
+        return {}
+    if _CACHE.get("stamp") != stamp:
+        _CACHE["stamp"] = stamp
+        _CACHE["table"] = load_table(path)
+    return _CACHE.get("table") or {}
+
+
 def load_table(path=TABLE):
     if not os.path.exists(path):
         return {}
@@ -477,6 +492,76 @@ def say(pct):
     if pct <= 10:
         return f"하위 {pct}%  ▶"
     return f"{pct}분위"
+
+
+# ── 봇이 부르는 자리 ─────────────────────────────────────────
+#
+# 아래 셋만 밖에서 쓴다. 화면 그리기와 섞지 않는다 —
+# 봇 메시지, /질문 답변, 알림이 각각 다른 모양을 원한다.
+
+def brief(coin, values, table=None, scales=None, skip=()):
+    """사람이 읽을 몇 줄. 붙일 게 없으면 빈 문자열.
+
+        펀딩비        +0.0037%   32분위
+        롱숏 계정비      1.180   31분위
+        테이커 매수비    0.523   상위 3%
+    """
+    ctx = context(coin, values, table if table is not None else table_once(), scales)
+    if not ctx:
+        return ""
+    out = []
+    for key, name, _k, _h, fmt in METRICS:
+        c = ctx.get(key)
+        if not c:
+            continue
+        tail = "  (비교 안 맞음)" if key in skip else ""
+        out.append(f"{w(name, 14)}{w(fmt.format(c['value']), 11, True)}"
+                   f"   {say(c['pct'])}{tail}")
+    n = len(extremes(ctx, skip=skip))
+    if n >= 3:
+        out.append(f"⚠️ {n}개 지표가 동시에 극단")
+    return "\n".join(out)
+
+
+def one_line(coin, values, table=None, scales=None, skip=()):
+    """한 줄. 극단인 것만 추린다. 없으면 빈 문자열."""
+    ctx = context(coin, values, table if table is not None else table_once(), scales)
+    hot = extremes(ctx, skip=skip)
+    if not hot:
+        return ""
+    bits = [f"{ctx[k]['name']} {say(ctx[k]['pct']).split()[0]}" for k in hot]
+    return f"{coin}: " + " · ".join(bits)
+
+
+def llm_context(coin, values, table=None, scales=None, skip=()):
+    """AI 에게 넘길 사실 묶음.
+
+    **단서를 반드시 같이 보낸다.** 숫자만 주면 모델이 거기서 매매
+    조언을 지어낸다 — 그럴듯한 문장이 나오지만 근거가 없다.
+    우리는 이 값들로 진입 시점을 고를 수 없다는 것을 60번 재서
+    확인했다. 그 사실이 숫자와 같이 가야 한다.
+    """
+    tab = table if table is not None else table_once()
+    ctx = context(coin, values, tab, scales)
+    if not ctx:
+        return ""
+    lines = [f"[{coin} 파생지표 — 지금 값과 역사적 위치]"]
+    for key, name, _k, _h, fmt in METRICS:
+        c = ctx.get(key)
+        if not c:
+            continue
+        note = " (비교가 맞지 않아 참고만)" if key in skip else ""
+        lines.append(
+            f"- {name}: {fmt.format(c['value'])} · "
+            f"{c['from']}~{c['to']} {c['n']:,}일 기준 {c['pct']}분위{note}")
+    lines.append(
+        "\n[해석 규칙 — 반드시 지킬 것]\n"
+        "- 위 숫자는 '지금이 평소와 얼마나 다른가'만 말한다.\n"
+        "- 이 지표들로 진입 시점을 고를 수 있는지 60가지 규칙으로\n"
+        "  측정했고, 무작위 진입을 이긴 것은 하나도 없었다.\n"
+        "- 따라서 매수·매도를 권하거나 방향을 예측하지 말 것.\n"
+        "- '무엇이 평소와 다른가'와 '무엇을 조심할까'까지만 말할 것.")
+    return "\n".join(lines)
 
 
 # ── 화면 ─────────────────────────────────────────────────────

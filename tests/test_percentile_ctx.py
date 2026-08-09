@@ -460,6 +460,84 @@ class TestTakerProbe(unittest.TestCase):
         self.assertEqual(rc, 1)
 
 
+class TestBotSurface(unittest.TestCase):
+    """봇이 부르는 자리. 여기가 화면 그리기와 섞이면 재사용이 안 된다."""
+
+    def table(self):
+        bp = fx.breakpoints([float(i) for i in range(1000)])
+        return {"BTC": {k: {"bp": bp, "n": 1000, "from": "2021-01-01",
+                            "to": "2026-08-01"}
+                        for k, *_ in fx.METRICS}}
+
+    def test_brief_lists_every_metric_it_has(self):
+        s = fx.brief("BTC", {"funding": 500.0, "ls_ratio": 500.0}, self.table())
+        self.assertIn("펀딩비", s)
+        self.assertIn("롱숏 계정비", s)
+
+    def test_brief_is_empty_when_nothing_is_known(self):
+        self.assertEqual(fx.brief("없는코인", {"funding": 1.0}, self.table()), "")
+
+    def test_brief_flags_three_extremes(self):
+        s = fx.brief("BTC", {"funding": 999.0, "ls_ratio": 1.0,
+                             "top_ls_ratio": 999.0}, self.table())
+        self.assertIn("3개 지표가 동시에 극단", s)
+
+    def test_one_line_only_mentions_extremes(self):
+        s = fx.one_line("BTC", {"funding": 999.0, "ls_ratio": 500.0},
+                        self.table())
+        self.assertIn("펀딩비", s)
+        self.assertNotIn("롱숏", s)
+
+    def test_one_line_is_empty_on_a_calm_day(self):
+        self.assertEqual(
+            fx.one_line("BTC", {"funding": 500.0}, self.table()), "")
+
+    def test_skip_removes_a_broken_metric_from_the_headline(self):
+        vals = {"funding": 999.0, "ls_ratio": 1.0, "taker_ratio": 999.0}
+        s = fx.brief("BTC", vals, self.table(), skip={"taker_ratio"})
+        self.assertNotIn("3개 지표가 동시에 극단", s)
+        self.assertIn("비교 안 맞음", s)
+
+
+class TestLlmContext(unittest.TestCase):
+    """숫자만 주면 모델이 거기서 매매 조언을 지어낸다.
+
+    그럴듯한 문장이 나오지만 근거가 없다. 우리는 이 값들로 진입
+    시점을 고를 수 없다는 것을 60번 재서 확인했다 — 그 사실이
+    숫자와 **같이** 가야 한다.
+    """
+
+    def table(self):
+        bp = fx.breakpoints([float(i) for i in range(1000)])
+        return {"BTC": {k: {"bp": bp, "n": 1000, "from": "2021-01-01",
+                            "to": "2026-08-01"}
+                        for k, *_ in fx.METRICS}}
+
+    def test_numbers_are_included(self):
+        s = fx.llm_context("BTC", {"funding": 990.0}, self.table())
+        self.assertIn("펀딩비", s)
+        self.assertIn("분위", s)
+
+    def test_the_measurement_result_travels_with_the_numbers(self):
+        s = fx.llm_context("BTC", {"funding": 990.0}, self.table())
+        self.assertIn("60", s)
+        self.assertIn("무작위", s)
+
+    def test_it_forbids_direction_calls(self):
+        s = fx.llm_context("BTC", {"funding": 990.0}, self.table())
+        self.assertIn("예측하지", s)
+
+    def test_it_names_the_baseline_period(self):
+        """'상위 3%'가 무엇에 대한 상위인지 없으면 숫자가 뜬다."""
+        s = fx.llm_context("BTC", {"funding": 990.0}, self.table())
+        self.assertIn("2021-01-01", s)
+        self.assertIn("1,000일", s)
+
+    def test_empty_when_nothing_is_known(self):
+        self.assertEqual(fx.llm_context("없는코인", {"funding": 1.0},
+                                        self.table()), "")
+
+
 class TestOutside(unittest.TestCase):
     """'중앙값에서 멀다'가 아니라 '과거 범위에 아예 못 들어간다'가 신호다."""
 
