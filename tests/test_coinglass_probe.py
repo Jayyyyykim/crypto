@@ -9,6 +9,10 @@
   · 경로 후보를 돌려 되는 것을 찾고, 전부 실패하면 실패로 남긴다
   · '가장 오래된 날' 은 받은 데이터에서 실제로 계산한다
   · 이어받기가 이미 있는 시각을 다시 적지 않는다
+  · **호출 하나하나** 사이에 간격을 둔다 (페이지 사이만이 아니라)
+  · 429 는 실패가 아니라 '나중에' — 기다렸다 다시 묻는다
+  · 200 인데 0봉이면 ✅ 가 아니다
+  · 실패한 이유가 화면까지 올라온다 ('+0' 으로 삼키지 않는다)
 """
 
 import io
@@ -64,6 +68,7 @@ def install(rules):
     net = FakeNet(rules)
     fx.urllib.request.urlopen = net
     fx.time.sleep = lambda s: None
+    fx._last_call[0] = 0.0        # 앞 테스트가 남긴 시각에 발목 잡히지 않게
     return net
 
 
@@ -115,6 +120,59 @@ class TestCall(unittest.TestCase):
         self.assertEqual(captured["hdr"], "MYKEY")
 
 
+class TestThrottle(unittest.TestCase):
+    """BTC 만 받히고 나머지 29종이 전부 +0 이던 원인이 여기였다.
+
+    예전엔 페이지 사이에서만 쉬어서, 코인이나 엔드포인트가 바뀔 때는
+    연달아 때렸다. 429 가 나고 그 뒤가 조용히 전멸했다.
+    """
+
+    def naps(self):
+        got = []
+        fx.time.sleep = lambda s: got.append(s)
+        return got
+
+    def test_every_call_is_spaced_not_just_pages(self):
+        install([("x", {"code": "0", "data": [1]})])
+        got = self.naps()
+        for _ in range(3):
+            fx.call("/x", "K", {})
+        self.assertGreaterEqual(len([s for s in got if s > 0]), 2,
+                                "호출 사이에 안 쉬었다 — 429 로 전멸한다")
+
+    def test_probe_of_many_endpoints_is_spaced(self):
+        """서로 다른 경로를 연달아 찔러도 간격이 있어야 한다."""
+        install([("a", {"code": "0", "data": [1]}),
+                 ("b", {"code": "0", "data": [1]})])
+        got = self.naps()
+        fx.call("/a", "K", {})
+        fx.call("/b", "K", {})
+        self.assertTrue(any(s > 0 for s in got), "경로가 바뀌면 안 쉰다")
+
+    def test_429_is_retried_not_treated_as_missing(self):
+        calls = {"n": 0}
+
+        def flaky(req, timeout=20):
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise urllib.error.HTTPError(req.full_url, 429, "rate", {},
+                                             io.BytesIO(b'{"msg":"slow down"}'))
+            return FakeNet._ok({"code": "0", "data": [1, 2]})
+        fx.urllib.request.urlopen = flaky
+        fx.time.sleep = lambda s: None
+        fx._last_call[0] = 0.0
+        ok, data, status = fx.call("/x", "K", {})
+        self.assertTrue(ok, "429 를 '없는 항목'으로 처리했다")
+        self.assertEqual(data, [1, 2])
+
+    def test_429_that_never_clears_is_a_failure(self):
+        install([("x", 429)])
+        fx.time.sleep = lambda s: None
+        ok, msg, status = fx.call("/x", "K", {})
+        self.assertFalse(ok)
+        self.assertEqual(status, 429)
+
+
 class TestProbe(unittest.TestCase):
 
     def test_first_working_path_wins(self):
@@ -142,25 +200,55 @@ class TestProbe(unittest.TestCase):
         self.assertIsNone(fx.oldest([]))
         self.assertIsNone(fx.oldest([{"close": "1"}]))
 
+    def test_empty_success_is_not_a_pass(self):
+        """200 인데 0봉을 ✅ 로 세면, 되는 줄 알고 결제한다."""
+        install([("x", {"code": "0", "data": []})])
+        r = fx.probe_one("합산 OI", "oi_agg", ["/api/futures/x"], "K", "BTC")
+        self.assertNotIn("error", r)
+        self.assertTrue(fx._looks_empty(r), "0봉인데 정상으로 봤다")
+
+    def test_nonempty_params_beat_empty_params(self):
+        """앞 후보가 0봉이라고 거기서 멈추면, 뒤에 있는 되는 조합을 못 본다.
+
+        oi_agg 가 이랬다 — 전거래소 합산인데 exchange 를 같이 보내서
+        빈 리스트가 왔다.
+        """
+        install([("exchange=Binance", {"code": "0", "data": []}),
+                 ("/api/futures/agg", series(50))])
+        r = fx.probe_one("합산 OI", "oi_agg", ["/api/futures/agg"], "K", "BTC")
+        self.assertEqual(r["rows"], 50, "0봉짜리 첫 후보에서 멈췄다")
+        self.assertNotIn("exchange", r["params"])
+
+    def test_real_data_beats_empty_on_a_later_path(self):
+        install([("/api/futures/a", {"code": "0", "data": []}),
+                 ("/api/futures/b", series(20))])
+        r = fx.probe_one("X", "x", ["/api/futures/a", "/api/futures/b"], "K", "BTC")
+        self.assertEqual(r["path"], "/api/futures/b")
+
+    def test_looks_empty_is_false_for_errors(self):
+        self.assertFalse(fx._looks_empty({"error": "403", "status": 403}))
+
 
 class TestFetch(unittest.TestCase):
 
     def test_pages_backwards_and_dedupes(self):
         install([("history", series(1000))])
-        rows = fx.fetch_series("/api/futures/open-interest/history",
-                               {"symbol": "BTCUSDT", "interval": "1d", "limit": 1000},
-                               "K", "BTC", "oi", None)
+        rows, why = fx.fetch_series("/api/futures/open-interest/history",
+                                    {"symbol": "BTCUSDT", "interval": "1d", "limit": 1000},
+                                    "K", "BTC", "oi", None)
         ts = [r["ts"] for r in rows]
         self.assertEqual(len(ts), len(set(ts)), "같은 시각을 두 번 담았다")
         self.assertGreaterEqual(len(rows), 1000)
+        self.assertIsNone(why)
 
     def test_stops_when_no_new_rows(self):
         """항상 같은 구간을 주는 서버에서도 멈춰야 한다."""
         install([("history", {"code": "0", "data": [{"time": NOW, "close": "1"}]})])
-        rows = fx.fetch_series("/api/futures/open-interest/history",
-                               {"symbol": "BTCUSDT", "interval": "1d"},
-                               "K", "BTC", "oi", None)
+        rows, why = fx.fetch_series("/api/futures/open-interest/history",
+                                    {"symbol": "BTCUSDT", "interval": "1d"},
+                                    "K", "BTC", "oi", None)
         self.assertEqual(len(rows), 1)
+        self.assertIsNone(why)
 
     def test_error_mid_page_keeps_what_it_got(self):
         calls = {"n": 0}
@@ -173,8 +261,139 @@ class TestFetch(unittest.TestCase):
             return FakeNet._ok(series(1000))
         fx.urllib.request.urlopen = flaky
         fx.time.sleep = lambda s: None
-        rows = fx.fetch_series("/p", {"symbol": "BTCUSDT"}, "K", "BTC", "oi", None)
+        fx._last_call[0] = 0.0
+        rows, why = fx.fetch_series("/p", {"symbol": "BTCUSDT"}, "K", "BTC", "oi", None)
         self.assertEqual(len(rows), 1000, "중간에 끊겼다고 받은 것까지 버렸다")
+        self.assertTrue(why, "왜 끊겼는지를 안 알려준다")
+
+    def test_failure_reason_reaches_the_caller(self):
+        """'+0' 만 찍으면 '없다'와 '거절당했다'가 구분이 안 된다.
+
+        29종이 전부 +0 이던 화면이 정확히 그랬다.
+        """
+        install([("/p", 403)])
+        rows, why = fx.fetch_series("/p", {"symbol": "BTCUSDT"}, "K", "BTC", "oi", None)
+        self.assertEqual(rows, [])
+        self.assertIn("403", str(why))
+
+    def test_empty_data_is_not_an_error(self):
+        install([("/p", {"code": "0", "data": []})])
+        rows, why = fx.fetch_series("/p", {"symbol": "BTCUSDT"}, "K", "BTC", "oi", None)
+        self.assertEqual(rows, [])
+        self.assertIsNone(why, "정말 없는 것을 오류로 찍었다")
+
+
+class TestFetchCommand(unittest.TestCase):
+    """--fetch 를 통째로 돌려 본다.
+
+    이 테스트가 없어서 'fetch_series 가 튜플을 돌려주는데 cmd_fetch 는
+    리스트로 받는' 크래시를 사용자가 먼저 만났다. 단위 테스트가 다
+    통과해도, 명령을 실제로 안 돌리면 이런 게 남는다.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.old = os.getcwd()
+        os.chdir(self.dir.name)
+        self.out = io.StringIO()
+
+    def tearDown(self):
+        os.chdir(self.old)
+        self.dir.cleanup()
+
+    def lines(self):
+        with open(fx.CACHE, encoding="utf-8") as fp:
+            return sum(1 for _ in fp)
+
+    def run_fetch(self, coins=("BTC", "ETH")):
+        import contextlib
+        with contextlib.redirect_stdout(self.out):
+            rc = fx.cmd_fetch("K", list(coins))
+        return rc, self.out.getvalue()
+
+    def test_writes_rows_for_every_coin(self):
+        install([("supported-coins", {"code": "0", "data": ["BTC", "ETH"]}),
+                 ("history", series(30))])
+        rc, out = self.run_fetch()
+        self.assertEqual(rc, 0)
+        with open(fx.CACHE, encoding="utf-8") as fp:
+            rows = [json.loads(l) for l in fp]
+        coins = {r["coin"] for r in rows}
+        self.assertEqual(coins, {"BTC", "ETH"},
+                         f"코인별로 안 받았다: {coins}\n{out}")
+
+    def test_resume_does_not_rewrite(self):
+        install([("supported-coins", {"code": "0", "data": ["BTC"]}),
+                 ("history", series(30))])
+        self.run_fetch(("BTC",))
+        n1 = self.lines()
+        self.out = io.StringIO()
+        self.run_fetch(("BTC",))
+        n2 = self.lines()
+        self.assertEqual(n1, n2, "이어받기가 같은 줄을 또 적었다")
+
+    def test_rejection_is_printed_not_swallowed(self):
+        """받다가 403 이 나면 화면에 이유가 떠야 한다."""
+        seen = {"n": 0}
+        net = FakeNet([("supported-coins", {"code": "0", "data": ["BTC"]}),
+                       ("history", series(30))])
+
+        def gate(req, timeout=20):
+            if "ETHUSDT" in req.full_url or "symbol=ETH" in req.full_url:
+                seen["n"] += 1
+                raise urllib.error.HTTPError(req.full_url, 403, "no", {},
+                                             io.BytesIO(b'{"msg":"upgrade plan"}'))
+            return net(req, timeout)
+        fx.urllib.request.urlopen = gate
+        fx.time.sleep = lambda s: None
+        fx._last_call[0] = 0.0
+        rc, out = self.run_fetch(("BTC", "ETH"))
+        self.assertIn("403", out, f"거절당한 걸 조용히 +0 으로 삼켰다\n{out}")
+        self.assertIn("⚠️", out)
+
+    def test_bad_key_stops_early(self):
+        install([("supported-coins", 401)])
+        rc, out = self.run_fetch()
+        self.assertEqual(rc, 1)
+
+
+class TestCoverage(unittest.TestCase):
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.old = os.getcwd()
+        self.old_env = os.environ.pop("COINGLASS_API_KEY", None)
+        os.chdir(self.dir.name)
+
+    def tearDown(self):
+        os.chdir(self.old)
+        if self.old_env is not None:
+            os.environ["COINGLASS_API_KEY"] = self.old_env
+        self.dir.cleanup()
+
+    def test_coverage_needs_no_key(self):
+        """구독을 끊은 뒤에도 받은 걸 확인할 수 있어야 한다.
+
+        키를 먼저 요구하면, 키가 죽은 다음엔 확인이 불가능해진다.
+        """
+        import contextlib
+        with open(fx.CACHE, "w", encoding="utf-8") as fp:
+            for i in range(3):
+                fp.write(json.dumps({"coin": "BTC", "kind": "oi",
+                                     "ts": NOW - i * DAY, "raw": {}}) + "\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = fx.main(["coinglass_probe.py", "--coverage"])
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertNotIn("API 키가 없습니다", out.getvalue())
+
+    def test_coverage_without_cache_explains(self):
+        import contextlib
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = fx.main(["coinglass_probe.py", "--coverage"])
+        self.assertEqual(rc, 1)
+        self.assertIn("--fetch", out.getvalue())
 
 
 class TestKey(unittest.TestCase):

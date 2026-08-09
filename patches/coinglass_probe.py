@@ -154,25 +154,55 @@ def api_key(argv):
     return ""
 
 
-def call(path, key, params, timeout=20):
-    """(성공?, 데이터 또는 오류문구, HTTP 상태)"""
+_last_call = [0.0]
+
+
+def _throttle():
+    """호출 **하나하나** 사이에 간격을 둔다.
+
+    예전엔 페이지 사이에만 쉬어서, 엔드포인트가 바뀌거나 코인이
+    바뀔 때는 그냥 연달아 때렸다. 그러면 429 가 나고, 그 뒤 요청이
+    전부 조용히 실패해 '+0' 으로만 보인다 — BTC 만 받히고 나머지
+    29종이 0건이던 원인이 이것이다.
+    """
+    wait = RATE_SLEEP - (time.time() - _last_call[0])
+    if wait > 0:
+        time.sleep(wait)
+    _last_call[0] = time.time()
+
+
+def call(path, key, params, timeout=20, retries=3):
+    """(성공?, 데이터 또는 오류문구, HTTP 상태)
+
+    429 는 '없다'가 아니라 '지금은 말고'다. 기다렸다 다시 묻는다.
+    """
     url = f"{BASE}{path}?{urllib.parse.urlencode(params)}"
     req = urllib.request.Request(url, headers={
         "CG-API-KEY": key,
         "accept": "application/json",
     })
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            body = json.loads(r.read().decode("utf-8"))
-            status = r.status
-    except urllib.error.HTTPError as e:
+    for attempt in range(retries):
+        _throttle()
         try:
-            body = json.loads(e.read().decode("utf-8"))
-        except Exception:
-            body = {"msg": str(e)}
-        return False, body.get("msg") or body.get("message") or str(e), e.code
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}", 0
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                body = json.loads(r.read().decode("utf-8"))
+                status = r.status
+            break
+        except urllib.error.HTTPError as e:
+            try:
+                body = json.loads(e.read().decode("utf-8"))
+            except Exception:
+                body = {"msg": str(e)}
+            msg = body.get("msg") or body.get("message") or str(e)
+            if e.code == 429 and attempt < retries - 1:
+                time.sleep(RATE_SLEEP * (2 ** (attempt + 1)))
+                continue
+            return False, msg, e.code
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(RATE_SLEEP)
+                continue
+            return False, f"{type(e).__name__}: {e}", 0
 
     # code 는 "0" 또는 0 이 성공
     code = str(body.get("code", "")).strip()
@@ -184,19 +214,53 @@ def call(path, key, params, timeout=20):
     return True, data, status
 
 
+def _looks_empty(r):
+    """code 0 인데 빈 리스트 — 파라미터가 그 엔드포인트와 안 맞는 경우다.
+
+    ✅ 로 세면 '되는 줄 알았는데 0건'이 된다. oi_agg 가 딱 이랬다:
+    전거래소 합산인데 exchange 를 같이 보내서 빈 리스트가 왔고,
+    그게 성공으로 찍혀 결제 판단을 흐렸다.
+    """
+    return "error" not in r and r.get("rows", 0) == 0
+
+
+def _param_sets(coin):
+    """같은 엔드포인트라도 문서 판마다 받는 파라미터가 다르다.
+
+    합산(aggregated) 계열은 exchange 를 주면 오히려 빈 리스트가 온다.
+    그래서 넓은 것부터 좁은 것까지 돌려 본다.
+    """
+    return (
+        {"exchange": EXCHANGE, "symbol": f"{coin}USDT", "interval": "1d", "limit": 1000},
+        {"symbol": f"{coin}USDT", "interval": "1d", "limit": 1000},
+        {"symbol": coin, "interval": "1d", "limit": 1000},
+        {"exchange_list": EXCHANGE, "symbol": coin, "interval": "1d", "limit": 1000},
+    )
+
+
 def probe_one(name, key_name, paths, key, coin):
-    """경로 후보를 돌려 첫 성공을 돌려준다."""
+    """경로·파라미터 후보를 돌려 **실제로 봉이 오는** 조합을 찾는다.
+
+    예전엔 첫 성공에서 멈췄다. 그런데 '성공인데 0봉'이 첫 후보로
+    걸리면 거기서 멈춰 버려서, 뒤에 있는 되는 조합을 못 봤다.
+    이제는 0봉이면 예비로만 잡아 두고 계속 찾는다.
+    """
+    last = (paths[0] if paths else "?", 0, "후보 없음")
+    spare = None
     for path in paths:
-        for params in (
-            {"exchange": EXCHANGE, "symbol": f"{coin}USDT", "interval": "1d", "limit": 1000},
-            {"symbol": coin, "interval": "1d", "limit": 1000},
-        ):
+        for params in _param_sets(coin):
             ok, data, status = call(path, key, params)
             if ok:
-                return {"path": path, "params": params, "rows": len(data),
-                        "data": data, "status": status}
+                r = {"path": path, "params": params, "rows": len(data),
+                     "data": data, "status": status}
+                if data:
+                    return r
+                if spare is None:
+                    spare = r
+                continue
             last = (path, status, data)
-            time.sleep(RATE_SLEEP)
+    if spare is not None:
+        return spare
     return {"error": last[2], "status": last[1], "path": last[0]}
 
 
@@ -206,7 +270,8 @@ def oldest(data):
     if not ts:
         return None
     import datetime
-    return datetime.datetime.utcfromtimestamp(min(ts) / 1000).strftime("%Y-%m-%d")
+    return datetime.datetime.fromtimestamp(
+        min(ts) / 1000, datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
 def cmd_probe(key):
@@ -229,12 +294,18 @@ def cmd_probe(key):
           + "  " + w("가장 오래된 날", 16) + "경로")
     print("  " + "─" * 76)
 
-    usable = []
+    usable, empty = [], []
     for name, kname, paths in ENDPOINTS:
         r = probe_one(name, kname, paths, key, PROBE_COINS[0])
         if "error" in r:
             print("  " + w(name, 26) + w(f"❌ {r['status']}", 10) + w("—", 9, True)
                   + "  " + w("—", 16) + r["path"])
+            continue
+        if _looks_empty(r):
+            # 200 인데 0봉. ✅ 로 찍으면 '되는 줄 알았는데 0건'이 된다.
+            print("  " + w(name, 26) + w("⚠️ 0봉", 10) + w(0, 9, True)
+                  + "  " + w("—", 16) + r["path"])
+            empty.append(name)
             continue
         old = oldest(r["data"]) or "?"
         print("  " + w(name, 26) + w("✅", 10) + w(r["rows"], 9, True)
@@ -242,6 +313,10 @@ def cmd_probe(key):
         usable.append((name, kname, r))
 
     print("  " + "─" * 76)
+    if empty:
+        print(f"\n  ⚠️ 응답은 왔는데 봉이 0개인 항목: {', '.join(empty)}")
+        print("     경로는 맞지만 파라미터가 안 맞거나, 그 등급에서 빈 값을 줍니다.")
+        print("     이 항목은 --fetch 해도 아무것도 안 쌓입니다. 없는 셈 치십시오.")
     if not usable:
         print("\n  되는 항목이 없습니다. 등급을 올려야 하거나 경로가 바뀌었습니다.")
         return 1
@@ -269,7 +344,10 @@ def fetch_series(path, params, key, coin, kname, oldest_ms):
         if end:
             p["end_time"] = end
         ok, data, status = call(path, key, p)
-        if not ok or not data:
+        if not ok:
+            # 조용히 0건으로 끝내면 '데이터가 없다'와 구분이 안 된다.
+            return rows, f"{status} {data}"
+        if not data:
             break
         got = 0
         oldest_ts = None
@@ -294,8 +372,7 @@ def fetch_series(path, params, key, coin, kname, oldest_ms):
         if oldest_ms and oldest_ts <= oldest_ms:
             break
         end = oldest_ts - 1
-        time.sleep(RATE_SLEEP)
-    return rows
+    return rows, None
 
 
 def cmd_fetch(key, coins):
@@ -308,9 +385,15 @@ def cmd_fetch(key, coins):
     live = []
     for name, kname, paths in ENDPOINTS:
         r = probe_one(name, kname, paths, key, PROBE_COINS[0])
-        if "error" not in r:
-            live.append((name, kname, r["path"], r["params"]))
-            print(f"    ✅ {name}")
+        if "error" in r:
+            print(f"    ❌ {name}  ({r['status']})")
+            continue
+        if _looks_empty(r):
+            # 0봉짜리를 목록에 넣으면 30종 × 여러 페이지를 헛돈다.
+            print(f"    ⚠️ {name} — 응답은 오는데 0봉이라 건너뜁니다")
+            continue
+        live.append((name, kname, r["path"], r["params"]))
+        print(f"    ✅ {name}")
     if not live:
         print("  되는 항목이 없습니다.")
         return 1
@@ -325,7 +408,7 @@ def cmd_fetch(key, coins):
                     continue
                 have.add((r["coin"], r["kind"], int(r["ts"])))
 
-    total = 0
+    total = failed = 0
     with open(CACHE, "a", encoding="utf-8", newline="") as fp:
         for coin in coins:
             for name, kname, path, base_params in live:
@@ -333,15 +416,29 @@ def cmd_fetch(key, coins):
                 if "symbol" in params:
                     params["symbol"] = (f"{coin}USDT" if params["symbol"].endswith("USDT")
                                         else coin)
-                rows = fetch_series(path, params, key, coin, kname, None)
+                rows, why = fetch_series(path, params, key, coin, kname, None)
                 fresh = [r for r in rows if (r["coin"], r["kind"], r["ts"]) not in have]
                 for r in fresh:
                     fp.write(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n")
                     have.add((r["coin"], r["kind"], r["ts"]))
                 fp.flush()
                 total += len(fresh)
-                print(f"    {coin:<8}{name:<24} +{len(fresh)}")
+                # +0 은 세 가지 뜻이 있다: 이미 받았다 / 서버가 거절했다 /
+                # 정말 없다. 구분해서 찍지 않으면 원인을 못 찾는다.
+                tail = ""
+                if why:
+                    tail = f"   ⚠️ {why}"
+                    failed += 1
+                elif not fresh and rows:
+                    tail = "   (이미 받음)"
+                elif not fresh:
+                    tail = "   (데이터 없음)"
+                print(f"    {coin:<8}{w(name, 24)}{len(fresh):>7}{tail}")
     print(f"\n  {total}건 저장 → {CACHE}")
+    if failed:
+        print(f"  ⚠️ 요청 {failed}건이 거절당했습니다. 위 사유를 보십시오.")
+        print("     429 가 많으면  --rate 를 낮추고,  403/40x 면 등급 문제입니다.")
+        print("     --fetch 를 다시 돌리면 못 받은 것만 이어받습니다.")
     return 0
 
 
@@ -368,7 +465,8 @@ def cmd_coverage():
             agg[k] = (min(lo, r["ts"]), max(hi, r["ts"]), n + 1)
 
     def day(ms):
-        return datetime.datetime.utcfromtimestamp(ms / 1000).strftime("%Y-%m-%d")
+        return datetime.datetime.fromtimestamp(
+            ms / 1000, datetime.timezone.utc).strftime("%Y-%m-%d")
 
     print("=" * 74)
     print("  받은 것 확인 — 구독 끊기 전에 여기가 채워졌는지 보십시오")
@@ -423,6 +521,12 @@ def main(argv):
         pass
 
     set_rate(argv)
+
+    # --coverage 는 이미 받아 둔 파일만 읽는다. 구독을 끊은 뒤에도
+    # 확인할 수 있어야 하므로 키를 요구하지 않는다.
+    if "--coverage" in argv:
+        return cmd_coverage()
+
     key = api_key(argv)
     if not key:
         print(f"""API 키가 없습니다. 셋 중 아무 방법이나 쓰면 됩니다.
@@ -445,8 +549,6 @@ def main(argv):
       python coinglass_probe.py""")
         return 1
 
-    if "--coverage" in argv:
-        return cmd_coverage()
     if "--fetch" in argv:
         print("=" * 74)
         print("  CoinGlass 일봉 이력 받기")
