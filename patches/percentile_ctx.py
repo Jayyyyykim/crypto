@@ -495,6 +495,29 @@ def cmd_build():
     return 0
 
 
+def daily_taker(liq, coin):
+    """테이커 매수비를 **하루치로** 받는다. 못 받으면 None.
+
+    feature_log 는 period='1h' 로 받고 buy/sell 인 비(比)를 준다.
+    그런데 과거(CoinGlass)는 하루치 매수/매도를 합친 **비율**이다.
+    한 시간 매수비는 하루보다 훨씬 요동쳐서, 그대로 견주면 종목의
+    79% 가 '역대 최고/최저'로 나온다 — 매일.
+
+    period='1d' 가 되고 buy·sell 원값을 주므로, 변환을 추측할 것도
+    없이 과거와 같은 방식으로 바로 계산한다.
+    """
+    try:
+        r = liq.get_taker_buy_sell(f"{coin}/USDT", period="1d", limit=1)
+    except Exception:
+        return None
+    if not isinstance(r, dict):
+        return None
+    b, s = _num(r.get("buy")), _num(r.get("sell"))
+    if b is None or s is None or (b + s) == 0:
+        return None
+    return b / (b + s)
+
+
 def live_values(coins):
     """지금 값을 가져온다. feature_log 의 수집기를 그대로 쓴다."""
     sys.path.insert(0, os.getcwd())
@@ -519,6 +542,10 @@ def live_values(coins):
         except Exception as e:
             print(f"    {c}: {type(e).__name__}: {e}")
             continue
+        # 테이커만 다시 받는다 — 과거와 같은 창(하루)이어야 비교가 된다.
+        t = daily_taker(liq, c)
+        if t is not None:
+            f["taker_ratio"] = t
         out[c] = f
     return out
 

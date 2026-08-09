@@ -326,6 +326,51 @@ class TestCalibration(unittest.TestCase):
         self.assertEqual(len(fx.extremes(ctx, skip={"taker_ratio"})), 1)
 
 
+class TestDailyTaker(unittest.TestCase):
+    """과거가 하루치면 지금 값도 하루치여야 한다.
+
+    한 시간 매수비를 하루 분포에 견주면 종목의 79% 가 '역대 최고'로
+    나온다 — 매일. 단위도 표기도 아니고 **시간 창**이 문제였다.
+    """
+
+    class Liq:
+        def __init__(self, per_period):
+            self.per = per_period
+            self.asked = []
+
+        def get_taker_buy_sell(self, symbol, period="1h", limit=1):
+            self.asked.append(period)
+            if period not in self.per:
+                raise ValueError(period)
+            return self.per[period]
+
+    def test_uses_the_daily_window(self):
+        liq = self.Liq({"1d": {"buy": 13826.38, "sell": 12611.92, "ratio": 1.1}})
+        self.assertAlmostEqual(fx.daily_taker(liq, "BTC"), 0.52297, places=4)
+        self.assertEqual(liq.asked, ["1d"])
+
+    def test_it_is_a_share_not_a_ratio(self):
+        """1.1 이 아니라 0.523 이 나와야 한다 — 과거와 같은 방식."""
+        liq = self.Liq({"1d": {"buy": 60.0, "sell": 40.0, "ratio": 1.5}})
+        self.assertAlmostEqual(fx.daily_taker(liq, "BTC"), 0.6)
+
+    def test_string_numbers_are_accepted(self):
+        liq = self.Liq({"1d": {"buy": "60", "sell": "40"}})
+        self.assertAlmostEqual(fx.daily_taker(liq, "BTC"), 0.6)
+
+    def test_no_daily_support_is_none_not_a_guess(self):
+        liq = self.Liq({"1h": {"buy": 1.0, "sell": 1.0}})
+        self.assertIsNone(fx.daily_taker(liq, "BTC"))
+
+    def test_zero_volume_is_none(self):
+        liq = self.Liq({"1d": {"buy": 0, "sell": 0}})
+        self.assertIsNone(fx.daily_taker(liq, "BTC"))
+
+    def test_missing_fields_are_none(self):
+        liq = self.Liq({"1d": {"ratio": 1.1}})
+        self.assertIsNone(fx.daily_taker(liq, "BTC"))
+
+
 class TestTakerProbe(unittest.TestCase):
     """--taker 는 추측하지 않고 실제로 뭐가 오는지 본다 (--peek 과 같은 수법).
 
