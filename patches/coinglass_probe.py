@@ -60,7 +60,7 @@ import urllib.request
 
 # 화면에 찍는다. "다시 받았나?"를 한 줄로 답할 수 있어야 한다 —
 # 파일을 몇 번씩 주고받으면서 어느 판이 도는지 몰라 20분씩 날렸다.
-VERSION = "2026-08-09e"
+VERSION = "2026-08-09f"
 
 BASE = "https://open-api-v4.coinglass.com"
 
@@ -653,6 +653,7 @@ def cmd_coverage():
     day = day_of
     agg = {}                      # (kind, coin) -> [lo, hi, 줄수, {날짜}]
     bad = odd_unit = 0
+    bad_where = {}                # 못 읽은 줄이 **어디** 것인지
     with open(CACHE, encoding="utf-8") as fp:
         for line in fp:
             line = line.strip()
@@ -660,24 +661,28 @@ def cmd_coverage():
                 continue
             try:
                 r = json.loads(line)
-                raw = int(r["ts"])
-                k = (r["kind"], r["coin"])
-            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            except json.JSONDecodeError:
                 bad += 1
+                bad_where["(줄이 깨짐)"] = bad_where.get("(줄이 깨짐)", 0) + 1
+                continue
+            k = (r.get("kind", "?"), r.get("coin", "?"))
+            try:
+                raw = int(r["ts"])
+            except (KeyError, TypeError, ValueError):
+                bad += 1
+                bad_where[f"{k[0]}/{k[1]}"] = bad_where.get(f"{k[0]}/{k[1]}", 0) + 1
                 continue
             # 이미 적힌 줄에 초·마이크로초가 섞여 있다. 여기서 맞춰
             # 읽지 않으면 같은 날이 다른 날로 갈리고, 윈도우에서는
             # 날짜 변환이 터진다.
             ts = to_ms(raw)
-            if ts is None:
+            if ts is None or day(ts) is None:
                 bad += 1
+                bad_where[f"{k[0]}/{k[1]}"] = bad_where.get(f"{k[0]}/{k[1]}", 0) + 1
                 continue
             if ts != raw:
                 odd_unit += 1
             d = day(ts)
-            if d is None:
-                bad += 1
-                continue
             v = agg.get(k)
             if v is None:
                 agg[k] = [ts, ts, 1, {d}]
@@ -730,7 +735,10 @@ def cmd_coverage():
         verdict.append((kind, len(rows), not dense and not holey))
 
     if bad:
-        print(f"\n  ⚠️ 읽을 수 없는 줄 {bad}개")
+        top = sorted(bad_where.items(), key=lambda x: -x[1])[:6]
+        print(f"\n  ⚠️ 읽을 수 없는 줄 {bad:,}개 — "
+              + ", ".join(f"{k} {n:,}" for k, n in top))
+        print("     시각이 시각이 아닌 값입니다. 그 항목·종목은 못 씁니다.")
     if odd_unit:
         print(f"\n  · 시각 단위가 다른 줄 {odd_unit:,}개를 밀리초로 맞춰 읽었습니다"
               " (엔드포인트마다 초·마이크로초가 섞여 옵니다)")
