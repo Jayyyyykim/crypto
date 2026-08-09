@@ -390,6 +390,40 @@ class TestSymbolVariants(unittest.TestCase):
         self.assertEqual(used, "ETHUSDT")
 
 
+class TestPathFallback(unittest.TestCase):
+    """BTC 로 정한 경로가 다른 코인에서는 안 될 수 있다.
+
+    TON 펀딩비가 두 번 연속 '200 Server Error' 로 죽었다. 같은 항목이
+    다른 29종에서는 멀쩡했으니 등급 문제가 아니다 — 그 경로가 TON 만
+    못 다루는 것이다.
+    """
+
+    def test_second_path_is_tried_after_server_error(self):
+        install([("/api/futures/funding-rate/history",
+                  {"code": "50001", "msg": "Server Error"}),
+                 ("/api/futures/fundingRate/ohlc-history", series(40))])
+        rows, why, used = fx.fetch_coin(
+            ["/api/futures/funding-rate/history",
+             "/api/futures/fundingRate/ohlc-history"],
+            {"symbol": "BTCUSDT", "interval": "1d"}, "K", "TON", "funding")
+        self.assertEqual(len(rows), 40, f"두 번째 경로를 안 봤다: {why}")
+        self.assertIsNone(why)
+
+    def test_plan_error_does_not_walk_every_path(self):
+        """403 이면 경로를 바꿔도 똑같이 막힌다. 30종 × 경로수만큼 헛돈다."""
+        net = install([("/api/futures", 403)])
+        fx.fetch_coin(["/api/futures/a", "/api/futures/b", "/api/futures/c"],
+                      {"symbol": "BTCUSDT"}, "K", "TON", "funding")
+        paths = {u.split("?")[0] for u in net.urls}
+        self.assertEqual(len(paths), 1, f"경로를 다 돌았다: {paths}")
+
+    def test_a_string_path_still_works(self):
+        install([("/one", series(5))])
+        rows, why, used = fx.fetch_coin("/one", {"symbol": "BTCUSDT"},
+                                        "K", "BTC", "oi")
+        self.assertEqual(len(rows), 5)
+
+
 class TestFetchCommand(unittest.TestCase):
     """--fetch 를 통째로 돌려 본다.
 
@@ -535,6 +569,26 @@ class TestCoverage(unittest.TestCase):
             rc = fx.main(["coinglass_probe.py", "--coverage"])
         self.assertEqual(rc, 1)
         self.assertIn("--fetch", out.getvalue())
+
+
+class TestOnly(unittest.TestCase):
+    """한 종목 확인하려고 30종 20분을 다시 도는 건 낭비다."""
+
+    def test_only_picks_the_listed_coins(self):
+        self.assertEqual(fx.pick_coins(argv=["p", "--fetch", "--only", "TON,PEPE"]),
+                         ["TON", "PEPE"])
+
+    def test_only_is_case_insensitive_and_trims(self):
+        self.assertEqual(fx.pick_coins(argv=["p", "--only", " ton , pepe "]),
+                         ["TON", "PEPE"])
+
+    def test_no_only_falls_back_to_the_scan_list(self):
+        got = fx.pick_coins(argv=["p", "--fetch"])
+        self.assertTrue(got)
+        self.assertNotIn("--fetch", got)
+
+    def test_empty_only_does_not_wipe_the_list(self):
+        self.assertTrue(fx.pick_coins(argv=["p", "--only", " , "]))
 
 
 class TestKey(unittest.TestCase):

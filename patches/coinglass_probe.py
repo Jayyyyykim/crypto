@@ -4,6 +4,7 @@
     python coinglass_probe.py                 # 무엇이 되고 몇 년치가 오나
     python coinglass_probe.py --fetch         # 되는 것만 일봉으로 받아 캐시
     python coinglass_probe.py --coverage      # 받은 게 온전한가 (구독 끊기 전 점검)
+    python coinglass_probe.py --fetch --only TON,PEPE   # 몇 종만 다시
 
     키를 환경변수 대신 직접 줄 수도 있습니다:
     python coinglass_probe.py --key 발급받은키
@@ -454,29 +455,45 @@ def fetch_series(path, params, key, coin, kname, oldest_ms):
     return rows, None
 
 
-def fetch_coin(path, base_params, key, coin, kname):
-    """한 코인 · 한 항목. 거래소 이름 표기를 바꿔 가며 시도한다.
+def _worth_another_try(why):
+    """다른 경로·다른 이름을 시도해 볼 가치가 있는 실패인가.
+
+    · '없는 쌍' → 이름 표기가 다를 수 있다
+    · 'Server Error' → 그 경로가 이 코인만 못 다루는 것일 수 있다
+      (TON 펀딩비가 두 번 연속 여기서 걸렸다)
+    · 403·한도 → 등급 문제다. 뭘 바꿔도 똑같이 막히고 시간만 든다
+    """
+    return bool(why) and (_no_such_pair(why) or _transient(why))
+
+
+def fetch_coin(paths, base_params, key, coin, kname):
+    """한 코인 · 한 항목. 경로와 이름 표기를 바꿔 가며 시도한다.
+
+    경로는 BTC 로 한 번 정하고 30종에 그대로 쓴다. 그런데 **BTC 에서
+    되는 경로가 다른 코인에서는 안 될 수 있다** — TON 펀딩비가 그랬다.
+    그래서 실패하면 남은 경로 후보도 돌려 본다.
 
     (줄, 실패사유 또는 None, 실제로 통한 심볼)
     """
+    if isinstance(paths, str):
+        paths = [paths]
     params = dict(base_params)
-    if "symbol" not in params:
-        rows, why = fetch_series(path, params, key, coin, kname, None)
-        return rows, why, ""
+    syms = ([None] if "symbol" not in params
+            else symbol_variants(coin, params["symbol"]))
 
     first = None
-    for sym in symbol_variants(coin, params["symbol"]):
-        p = dict(params)
-        p["symbol"] = sym
-        rows, why = fetch_series(path, p, key, coin, kname, None)
-        if rows:
-            return rows, why, sym
-        if first is None:
-            first = (rows, why, sym)
-        # 이름 문제일 때만 다음 표기를 시도한다. 등급·한도 문제면
-        # 이름을 바꿔 봐야 똑같이 막히고 시간만 3배로 든다.
-        if not (why and _no_such_pair(why)):
-            return rows, why, sym
+    for path in paths:
+        for sym in syms:
+            p = dict(params)
+            if sym:
+                p["symbol"] = sym
+            rows, why = fetch_series(path, p, key, coin, kname, None)
+            if rows:
+                return rows, why, (sym or "")
+            if first is None:
+                first = (rows, why, sym or "")
+            if not _worth_another_try(why):
+                return rows, why, (sym or "")
     return first
 
 
@@ -497,7 +514,9 @@ def cmd_fetch(key, coins):
             # 0봉짜리를 목록에 넣으면 30종 × 여러 페이지를 헛돈다.
             print(f"    ⚠️ {name} — 응답은 오는데 0봉이라 건너뜁니다")
             continue
-        live.append((name, kname, r["path"], r["params"]))
+        # BTC 로 통한 경로를 앞에 두고, 나머지 후보는 예비로 남긴다.
+        order = [r["path"]] + [p for p in paths if p != r["path"]]
+        live.append((name, kname, order, r["params"]))
         print(f"    ✅ {name}")
     if not live:
         print("  되는 항목이 없습니다.")
@@ -516,8 +535,8 @@ def cmd_fetch(key, coins):
     total = failed = 0
     with open(CACHE, "a", encoding="utf-8", newline="") as fp:
         for coin in coins:
-            for name, kname, path, base_params in live:
-                rows, why, used = fetch_coin(path, base_params, key, coin, kname)
+            for name, kname, paths, base_params in live:
+                rows, why, used = fetch_coin(paths, base_params, key, coin, kname)
                 fresh = [r for r in rows if (r["coin"], r["kind"], r["ts"]) not in have]
                 for r in fresh:
                     fp.write(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n")
@@ -645,7 +664,18 @@ def cmd_coverage():
     return 0
 
 
-def pick_coins(n=30):
+def pick_coins(n=30, argv=()):
+    """--only TON,PEPE 로 몇 종만 다시 받을 수 있다.
+
+    한 종목 확인하려고 30종 20분을 다시 도는 건 낭비다.
+    """
+    if "--only" in argv:
+        i = list(argv).index("--only")
+        if i + 1 < len(argv):
+            want = [c.strip().upper() for c in argv[i + 1].split(",") if c.strip()]
+            if want:
+                return want
+
     for mod_name, var in (("spotlight", "SCAN_COINS"), ("config", "SCAN_COINS"),
                           ("config", "COINS")):
         try:
@@ -697,12 +727,17 @@ def main(argv):
         return 1
 
     if "--fetch" in argv:
+        coins = pick_coins(argv=argv)
         print("=" * 74)
         print("  CoinGlass 일봉 이력 받기")
         print("=" * 74)
         print(f"  분당 {RATE_PER_MIN}회 기준 · 요청 간 {RATE_SLEEP:.1f}초")
-        print("  30종이면 20~40분쯤 걸립니다. 중간에 끊겨도 받은 것은 남습니다.")
-        return cmd_fetch(key, pick_coins())
+        if len(coins) <= 5:
+            print(f"  대상 {len(coins)}종: {', '.join(coins)}")
+        else:
+            print("  30종이면 20~40분쯤 걸립니다. 중간에 끊겨도 받은 것은 남습니다.")
+            print("  몇 종만 다시 받으려면:  --only TON,PEPE")
+        return cmd_fetch(key, coins)
     return cmd_probe(key)
 
 
