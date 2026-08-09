@@ -230,6 +230,22 @@ def day_of(ms):
         return None
 
 
+# 못 읽은 줄의 표본. 개수만 세면 '왜' 를 알 수 없다 —
+# BTC 자료가 통째로 빠진 걸 개수만 보고는 못 찾았다.
+SKIP_SAMPLE = {}
+
+
+def _skip(skipped, kind, coin, why, rec):
+    """못 읽은 줄을 세고, 종목별로 갈라 두고, 하나는 통째로 남긴다.
+
+    개수만 세면 '몇 개'는 알아도 '어디'와 '왜'를 모른다. BTC 자료가
+    통째로 빠진 것을 개수만 보고는 못 찾았다.
+    """
+    skipped[kind] = skipped.get(kind, 0) + 1
+    box = SKIP_SAMPLE.setdefault(kind, {"why": why, "coins": {}, "one": rec})
+    box["coins"][coin] = box["coins"].get(coin, 0) + 1
+
+
 def load_cache(path=CACHE):
     """{kind: {coin: {날짜: 값}}}, {kind: 쓴 칼럼 이름}
 
@@ -238,6 +254,7 @@ def load_cache(path=CACHE):
     시점이 어긋난다.
     """
     out, cols, skipped = {}, {}, {}
+    SKIP_SAMPLE.clear()
     if not os.path.exists(path):
         return out, cols, skipped
     tmp = {}                      # kind -> coin -> date -> (ts, 값)
@@ -254,11 +271,11 @@ def load_cache(path=CACHE):
             ms = to_ms(r.get("ts"))
             date = day_of(ms) if ms is not None else None
             if date is None:
-                skipped[kind] = skipped.get(kind, 0) + 1
+                _skip(skipped, kind, coin, "시각이 시각이 아님", r)
                 continue
             v, col = value_of(kind, r.get("raw"))
             if v is None:
-                skipped[kind] = skipped.get(kind, 0) + 1
+                _skip(skipped, kind, coin, "값을 못 뽑음", r)
                 continue
             if col and kind not in cols:
                 cols[kind] = col
@@ -301,6 +318,25 @@ def cmd_peek(path=CACHE):
             print("    ⚠️ 아는 이름이 없어 첫 숫자를 집었습니다. 맞는지 확인하십시오.")
     print("\n" + "=" * 78)
     print("  이상하면 알려 주십시오. EXTRACT 의 칼럼 후보를 고치면 됩니다.")
+
+    # 못 읽는 줄이 있으면 그게 어느 종목인지, 어떻게 생겼는지 보여준다.
+    _, _, skipped = load_cache(path)
+    if SKIP_SAMPLE:
+        print("\n" + "=" * 78)
+        print("  못 읽은 줄 — 어느 종목이 빠지고 있나")
+        print("=" * 78)
+        for kind, box in sorted(SKIP_SAMPLE.items()):
+            top = sorted(box["coins"].items(), key=lambda x: -x[1])[:6]
+            print(f"\n  [{kind}]  {skipped.get(kind, 0):,}줄 · {box['why']}")
+            print("    " + ", ".join(f"{c} {n:,}" for c, n in top))
+            one = box["one"]
+            raw = one.get("raw")
+            print(f"    표본: ts={one.get('ts')!r}")
+            if isinstance(raw, dict):
+                print(f"          raw 칼럼={list(raw)[:8]}")
+                print(f"          raw 값={[raw[k] for k in list(raw)[:8]]}")
+            else:
+                print(f"          raw={raw!r}")
     return 0
 
 
@@ -447,6 +483,30 @@ def split(ts, mid):
 
 # ── 실행 ─────────────────────────────────────────────────────
 
+def ohlcv(sym, coin, days):
+    """시세를 받는다. 현물에 없으면 무기한 선물 표기로 다시 시도한다.
+
+    CoinGlass 자료는 선물 쪽인데 시세는 현물에서 받고 있었다. 최근
+    상장 종목은 거래소에 현물이 없어서 8종이 통째로 빠졌다 —
+    ARB·SUI·TIA·SEI·RENDER·TON·PEPE·WIF. 하필 **최근 상장만**
+    빠지면 남은 표본이 오래된 코인 쪽으로 기운다.
+    """
+    forms = [sym, f"{coin}/USDT:USDT", f"{coin}USDT",
+             f"1000{coin}/USDT", f"1000{coin}/USDT:USDT"]
+    seen = set()
+    for s in forms:
+        if s in seen:
+            continue
+        seen.add(s)
+        try:
+            df = bt.get_ohlcv_history(s, "1d", days + 200)
+        except Exception:
+            continue
+        if df is not None and len(df) >= 200:
+            return df
+    return None
+
+
 def run(coins, days, cache):
     hits = {n: [] for n, _, _ in CANDIDATES}
     base = {True: [], False: []}
@@ -458,7 +518,7 @@ def run(coins, days, cache):
             nodata.append(coin)
             continue
         try:
-            df = bt.get_ohlcv_history(sym, "1d", days + 200)
+            df = ohlcv(sym, coin, days)
             if df is None or len(df) < 200:
                 failed.append(coin)
                 continue

@@ -292,6 +292,112 @@ class TestAttach(unittest.TestCase):
         self.assertTrue(longs and shorts)
 
 
+class TestSkipDiagnostic(unittest.TestCase):
+    """개수만 세면 '몇 개'는 알아도 '어디'와 '왜'를 모른다.
+
+    BTC 자료가 통째로 빠진 채 22종으로 잰 것을, 못 읽음 개수만
+    보고는 못 찾았다. 개수가 BTC 줄 수와 같다는 걸 사람이 눈으로
+    맞춰 봐야 알았다.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "c.jsonl")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def write(self, rows):
+        with open(self.path, "w", encoding="utf-8") as fp:
+            for r in rows:
+                fp.write(json.dumps(r) + "\n")
+
+    def test_skips_are_broken_down_by_coin(self):
+        self.write([{"kind": "oi", "coin": "ETH", "ts": NOW, "raw": {"close": 1}}]
+                   + [{"kind": "oi", "coin": "BTC", "ts": NOW - i * DAY,
+                       "raw": {"close": None}} for i in range(7)])
+        cache, _, skipped = fx.load_cache(self.path)
+        self.assertEqual(skipped["oi"], 7)
+        self.assertEqual(fx.SKIP_SAMPLE["oi"]["coins"], {"BTC": 7})
+
+    def test_a_whole_sample_row_is_kept(self):
+        self.write([{"kind": "oi", "coin": "BTC", "ts": NOW, "raw": {"close": None}}])
+        fx.load_cache(self.path)
+        self.assertEqual(fx.SKIP_SAMPLE["oi"]["one"]["coin"], "BTC")
+
+    def test_sample_resets_between_loads(self):
+        self.write([{"kind": "oi", "coin": "BTC", "ts": NOW, "raw": {"close": None}}])
+        fx.load_cache(self.path)
+        self.write([{"kind": "oi", "coin": "ETH", "ts": NOW, "raw": {"close": 1}}])
+        fx.load_cache(self.path)
+        self.assertNotIn("oi", fx.SKIP_SAMPLE, "지난 실행의 표본이 남았다")
+
+
+class TestOhlcvFallback(unittest.TestCase):
+    """CoinGlass 자료는 선물인데 시세를 현물에서 받고 있었다.
+
+    최근 상장 8종(ARB·SUI·TIA·SEI·RENDER·TON·PEPE·WIF)이 통째로
+    빠졌다. 하필 최근 상장만 빠지면 표본이 오래된 코인 쪽으로 기운다.
+    """
+
+    class Fake:
+        def __init__(self, ok):
+            self.ok = ok
+            self.tried = []
+
+        def get_ohlcv_history(self, sym, tf, n):
+            self.tried.append(sym)
+            if sym != self.ok:
+                raise ValueError(f"bitget does not have market symbol {sym}")
+            return list(range(300))
+
+    def drive(self, ok):
+        old = fx.bt
+        fake = self.Fake(ok)
+        fx.bt = fake
+        try:
+            return fx.ohlcv("TON/USDT", "TON", 1460), fake.tried
+        finally:
+            fx.bt = old
+
+    def test_spot_is_tried_first(self):
+        df, tried = self.drive("TON/USDT")
+        self.assertIsNotNone(df)
+        self.assertEqual(tried, ["TON/USDT"])
+
+    def test_perp_form_is_the_fallback(self):
+        df, tried = self.drive("TON/USDT:USDT")
+        self.assertIsNotNone(df, f"선물 표기를 안 시도했다: {tried}")
+        self.assertIn("TON/USDT:USDT", tried)
+
+    def test_thousand_form_for_tiny_coins(self):
+        df, tried = self.drive("1000PEPE/USDT")
+        old = fx.bt
+        try:
+            fx.bt = self.Fake("1000PEPE/USDT")
+            got = fx.ohlcv("PEPE/USDT", "PEPE", 1460)
+        finally:
+            fx.bt = old
+        self.assertIsNotNone(got)
+
+    def test_all_forms_failing_returns_none(self):
+        df, tried = self.drive("없는것")
+        self.assertIsNone(df)
+        self.assertGreaterEqual(len(tried), 3)
+
+    def test_short_history_is_not_accepted(self):
+        class Short(self.Fake):
+            def get_ohlcv_history(self, sym, tf, n):
+                self.tried.append(sym)
+                return list(range(10))
+        old = fx.bt
+        try:
+            fx.bt = Short("x")
+            self.assertIsNone(fx.ohlcv("A/USDT", "A", 1460))
+        finally:
+            fx.bt = old
+
+
 class TestStats(unittest.TestCase):
 
     def test_thin_period_cannot_pass(self):
