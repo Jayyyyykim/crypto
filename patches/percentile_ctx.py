@@ -60,12 +60,16 @@ MIN_DAYS = 200             # 이보다 짧으면 분위수가 의미 없다
 #
 # 파생이 필요한 것은 미결제약정뿐이다. 수준(1.5e9)은 코인끼리도
 # 시기끼리도 비교가 안 된다. 하루 변화율(%)로 바꿔야 비교가 된다.
+# 이름은 **모델이 읽는 유일한 설명**이다. 짧게 줄이면 모델이 채워
+# 넣는다. 실제로 '테이커 매수비'를 보고 "현물 매수가 미친 듯이
+# 들어온다"고 썼다 — 바이낸스 **선물**의 시장가 매수 비중인데.
+# 그 위에 "현물 ETF 유입 때문"이라는 추론까지 쌓았다.
 METRICS = [
-    ("funding", "펀딩비", "funding", None, "{:+.4f}%"),
-    ("oi_chg_24h", "OI 24h", "oi", "pct_change", "{:+.2f}%"),
-    ("ls_ratio", "롱숏 계정비", "ls_ratio", None, "{:.3f}"),
-    ("top_ls_ratio", "상위 트레이더", "top_ls", None, "{:.3f}"),
-    ("taker_ratio", "테이커 매수비", "taker", None, "{:.3f}"),
+    ("funding", "펀딩비(선물)", "funding", None, "{:+.4f}%"),
+    ("oi_chg_24h", "미결제약정 24h변화(선물)", "oi", "pct_change", "{:+.2f}%"),
+    ("ls_ratio", "롱숏 계정비(선물·전체계정)", "ls_ratio", None, "{:.3f}"),
+    ("top_ls_ratio", "롱숏 계정비(선물·상위계정)", "top_ls", None, "{:.3f}"),
+    ("taker_ratio", "테이커 매수비중(선물·현물아님)", "taker", None, "{:.3f}"),
 ]
 
 
@@ -582,7 +586,9 @@ def llm_context(coin, values, table=None, scales=None, skip=()):
     ctx = context(coin, values, tab, scales)
     if not ctx:
         return ""
-    lines = [f"[{coin} 파생지표 — 지금 값과 역사적 위치]"]
+    lines = [f"[{coin} 파생지표 — 지금 값과 역사적 위치]",
+             "출처: 바이낸스 **무기한 선물**. 현물 지표가 아니다.",
+             "분위는 그 코인 자신의 과거 분포 기준이다 (코인 간 비교가 아님)."]
     for key, name, _k, _h, fmt in METRICS:
         c = ctx.get(key)
         if not c:

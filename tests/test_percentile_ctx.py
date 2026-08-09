@@ -585,6 +585,30 @@ class TestLlmContext(unittest.TestCase):
         self.assertEqual(fx.llm_context("없는코인", {"funding": 1.0},
                                         self.table()), "")
 
+    def test_it_says_these_are_futures_not_spot(self):
+        """모델이 '테이커 매수비'를 보고 "현물 매수가 미친 듯이 들어온다"고
+        썼다. 바이낸스 **선물**의 시장가 매수 비중인데. 그 위에
+        "현물 ETF 유입 때문"이라는 추론까지 쌓았다.
+
+        이름이 모델이 읽는 유일한 설명이다. 짧으면 채워 넣는다.
+        """
+        s = fx.llm_context("BTC", {"taker_ratio": 500.0}, self.table())
+        self.assertIn("선물", s)
+        self.assertIn("현물 지표가 아니다", s)
+
+    def test_metric_names_carry_their_market(self):
+        for key, name, *_rest in fx.METRICS:
+            self.assertIn("선물", name, f"{key} 의 이름에 시장이 없다: {name}")
+
+    def test_the_taker_name_says_it_is_not_spot(self):
+        name = dict((k, n) for k, n, *_ in fx.METRICS)["taker_ratio"]
+        self.assertIn("현물아님", name)
+
+    def test_it_says_percentiles_are_per_coin(self):
+        """'상위 3%'가 코인들 사이의 순위로 읽히면 뜻이 완전히 달라진다."""
+        s = fx.llm_context("BTC", {"funding": 990.0}, self.table())
+        self.assertIn("코인 간 비교가 아님", s)
+
 
 class TestOutside(unittest.TestCase):
     """'중앙값에서 멀다'가 아니라 '과거 범위에 아예 못 들어간다'가 신호다."""
