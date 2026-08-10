@@ -581,6 +581,23 @@ class TestBotSurface(unittest.TestCase):
         self.assertEqual(
             fx.one_line("BTC", {"funding": 500.0}, self.table()), "")
 
+    def test_one_line_keeps_the_number(self):
+        """'하위' 만 남기면 9분위인지 10분위인지를 잃는다.
+
+        실제로 봉마감 브리핑에 '롱숏 계정비 하위' 라고만 나왔다.
+        한 줄로 줄이려다 정작 쓸모 있는 부분을 버린 것이다.
+        """
+        s = fx.one_line("BTC", {"funding": 30.0}, self.table())
+        self.assertIn("%", s, s)
+        self.assertNotIn("▶", s)
+        self.assertNotIn("◀", s)
+
+    def test_short_drops_arrows_only(self):
+        self.assertEqual(fx._short(9), "하위 9%")
+        self.assertEqual(fx._short(97), "상위 3%")
+        self.assertEqual(fx._short(100), "역대 최고 수준")
+        self.assertEqual(fx._short(0), "역대 최저 수준")
+
     def test_skip_removes_a_broken_metric_from_the_headline(self):
         vals = {"funding": 999.0, "ls_ratio": 1.0, "taker_ratio": 999.0}
         s = fx.brief("BTC", vals, self.table(), skip={"taker_ratio"})

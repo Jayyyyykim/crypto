@@ -564,13 +564,22 @@ def brief(coin, values, table=None, scales=None, skip=()):
     return "\n".join(out)
 
 
+def _short(pct):
+    """say() 에서 화살표만 뗀다. **숫자는 남긴다.**
+
+    '하위' 만 남기면 9분위인지 10분위인지를 잃는다. 한 줄로 줄이려다
+    정작 쓸모 있는 부분을 버리는 셈이다.
+    """
+    return say(pct).replace("◀", "").replace("▶", "").strip()
+
+
 def one_line(coin, values, table=None, scales=None, skip=()):
     """한 줄. 극단인 것만 추린다. 없으면 빈 문자열."""
     ctx = context(coin, values, table if table is not None else table_once(), scales)
     hot = extremes(ctx, skip=skip)
     if not hot:
         return ""
-    bits = [f"{ctx[k]['name']} {say(ctx[k]['pct']).split()[0]}" for k in hot]
+    bits = [f"{ctx[k]['name']} {_short(ctx[k]['pct'])}" for k in hot]
     return f"{coin}: " + " · ".join(bits)
 
 
