@@ -670,6 +670,33 @@ def daily_taker(liq, coin):
     return b / (b + s)
 
 
+_LIVE = {}
+
+
+def live_cached(coins, ttl=600):
+    """지금 값 — 코인당 ttl 초 동안 재사용한다.
+
+    봉마감이 4H·12H·1D 동시에 닫히면 같은 코인을 세 번 부르게 된다.
+    한 코인에 API 호출이 다섯 번씩 붙으니 그대로 두면 마감 때마다
+    수십 번을 헛돈다. 값은 하루 단위라 10분 캐시로 잃는 게 없다.
+    """
+    import time as _t
+    now = _t.time()
+    out, need = {}, []
+    for c in coins:
+        hit = _LIVE.get(c)
+        if hit and now - hit[0] < ttl:
+            out[c] = hit[1]
+        else:
+            need.append(c)
+    if need:
+        fresh = live_values(need) or {}
+        for c, v in fresh.items():
+            _LIVE[c] = (now, v)
+            out[c] = v
+    return out
+
+
 def live_values(coins):
     """지금 값을 가져온다. feature_log 의 수집기를 그대로 쓴다."""
     sys.path.insert(0, os.getcwd())

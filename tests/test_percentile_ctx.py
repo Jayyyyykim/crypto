@@ -395,6 +395,47 @@ class TestFlagsCarryOver(unittest.TestCase):
         cal = fx.calibration(ctxs)
         self.assertIn("taker_ratio", cal)
         self.assertIn("taker_ratio", fx.miscalibrated(cal))
+class TestLiveCache(unittest.TestCase):
+    """봉마감이 4H·12H·1D 동시에 닫히면 같은 코인을 세 번 부른다.
+
+    한 코인에 API 호출이 다섯 번씩 붙으니, 그대로 두면 마감 때마다
+    수십 번을 헛돈다. 값은 하루 단위라 10분 캐시로 잃는 게 없다.
+    """
+
+    def setUp(self):
+        self.calls = []
+        self.old = fx.live_values
+        fx._LIVE.clear()
+
+        def fake(coins):
+            self.calls.append(list(coins))
+            return {c: {"funding": 0.01} for c in coins}
+        fx.live_values = fake
+
+    def tearDown(self):
+        fx.live_values = self.old
+        fx._LIVE.clear()
+
+    def test_second_call_does_not_hit_the_network(self):
+        fx.live_cached(["BTC"])
+        fx.live_cached(["BTC"])
+        self.assertEqual(len(self.calls), 1, self.calls)
+
+    def test_only_the_missing_coins_are_fetched(self):
+        fx.live_cached(["BTC"])
+        fx.live_cached(["BTC", "ETH"])
+        self.assertEqual(self.calls[-1], ["ETH"])
+
+    def test_expired_entries_are_refetched(self):
+        fx.live_cached(["BTC"], ttl=0)
+        fx.live_cached(["BTC"], ttl=0)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_it_returns_every_asked_coin(self):
+        got = fx.live_cached(["BTC", "ETH"])
+        self.assertEqual(set(got), {"BTC", "ETH"})
+
+
 class TestDailyTaker(unittest.TestCase):
     """과거가 하루치면 지금 값도 하루치여야 한다.
 
