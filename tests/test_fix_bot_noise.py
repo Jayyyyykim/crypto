@@ -166,21 +166,28 @@ class TestApply(Base):
         for tag in ("㉔ ", "㉕ ", "㉖a", "㉖b"):
             line = next(l for l in body if tag in l)
             self.assertIn("적용 예정", line, f"{tag} 자리를 못 찾았다")
-        self.assertEqual(out.count("대상 없음"), 1)
+        # ㉔u·㉔n 은 이미 붙인 판을 갈아 끼우는 자리라 새 봇엔 없다
+        self.assertEqual(out.count("대상 없음"), 2)
 
     def test_the_loose_version_gets_upgraded(self):
         """느슨한 판을 이미 붙인 봇이 있다. 그 판은 표기가 다른
         심볼을 봐줘서 로그가 안 조용해진다 — 갈아 끼워야 한다."""
         self.run_fx("--apply")
-        loose = self.read().replace(fx.TIGHT_NEW, fx.LOOSE_OLD)
+        loose = (self.read().replace(fx.TIGHT_NEW, fx.LOOSE_OLD)
+                             .replace(fx.NEAR_NEW, fx.NEAR_OLD))
         self.assertIn('(s + ":USDT") in have', loose)
+        self.assertIn("if o != b and (b in o or o in b):", loose)
         self.write(loose)
         rc, out = self.run_fx()
-        line = next(l for l in out.splitlines() if "㉔u" in l)
-        self.assertIn("적용 예정", line)
+        for tag in ("㉔u", "㉔n"):
+            line = next(l for l in out.splitlines() if tag in l)
+            self.assertIn("적용 예정", line)
         self.run_fx("--apply")
-        self.assertIn("실제로 부를 때 쓰는 규칙이 같아야", self.read())
-        self.assertIn("market_symbol", self.read())
+        s = self.read()
+        self.assertIn("실제로 부를 때 쓰는 규칙이 같아야", s)
+        self.assertIn("market_symbol", s)
+        self.assertIn("가운데 끼어 있는 건 우연이다", s)
+        self.assertNotIn("if o != b and (b in o or o in b):", s)
 
     def test_result_still_parses(self):
         self.run_fx("--apply")
@@ -291,6 +298,12 @@ class TestUniverse(Base):
             m.get_paper_coins()
         self.assertIn("AAOI(→AAOIX/USDT?)", out.getvalue())
         self.assertIn("표기만 다른 것일 수 있습니다", out.getvalue())
+
+    def test_a_one_letter_coin_is_not_a_suggestion(self):
+        """'A' 가 'SKYAI' 안에 있다는 이유로 SKYAI(→A/USDT?) 를
+        찍은 적이 있다. 한 글자 코인은 거의 모든 이름과 겹친다."""
+        self.assertEqual(fx._near("SKYAI", {"A/USDT", "BTC/USDT"}), [])
+        self.assertEqual(fx._near("XRP", {"X/USDT", "R/USDT"}), [])
 
     def test_no_arrow_when_nothing_is_similar(self):
         m = self.bot()

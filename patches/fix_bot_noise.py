@@ -102,12 +102,24 @@ def _near(base, have):
 
     SKHYNIX·AAOI 같은 토큰화 주식은 코인 거래소에서도 매매된다.
     이름만 보고 '주식이니 가짜'라고 판단하면 안 된다.
+
+    '들어 있으면 비슷하다'로 보면 안 된다. SKYAI 를 A/USDT 로
+    짚은 적이 있다 — 'A' 가 'SKYAI' 안에 있으니까. 한 글자짜리
+    코인은 거의 모든 이름과 겹친다.
+
+    그래서 **앞이나 뒤가 붙은 꼴**만 본다 (1000PEPE, AAOIX).
+    가운데 끼어 있는 건 우연이다.
     """
     b = base.upper()
+    if len(b) < 3:
+        return []
     hit = []
     for s in have:
         o = s.split("/")[0].split(":")[0].upper()
-        if o != b and (b in o or o in b):
+        if o == b or len(o) < 3:
+            continue
+        long_, short_ = (o, b) if len(o) > len(b) else (b, o)
+        if long_.startswith(short_) or long_.endswith(short_):
             hit.append(s)
     return sorted(hit)[:3]
 
@@ -237,6 +249,16 @@ ERR_NEW = """        result = r.json()
         comment = result['content'][0]['text']"""
 
 
+# ── ㉔n 비슷한 이름 찾기가 너무 헐거웠다 ──
+#
+# 'A' 가 'SKYAI' 안에 있다는 이유로 SKYAI(→A/USDT?) 를 찍었다.
+# 한 글자짜리 코인은 거의 모든 이름과 겹친다. 앞이나 뒤가 붙은
+# 꼴만 본다 (1000PEPE, AAOIX). 가운데 끼어 있는 건 우연이다.
+NEAR_OLD = '    b = base.upper()\n    hit = []\n    for s in have:\n        o = s.split("/")[0].split(":")[0].upper()\n        if o != b and (b in o or o in b):\n            hit.append(s)\n    return sorted(hit)[:3]'
+
+NEAR_NEW = '    \'들어 있으면 비슷하다\'로 보면 안 된다. SKYAI 를 A/USDT 로\n    짚은 적이 있다 — \'A\' 가 \'SKYAI\' 안에 있으니까. 한 글자짜리\n    코인은 거의 모든 이름과 겹친다.\n\n    그래서 **앞이나 뒤가 붙은 꼴**만 본다 (1000PEPE, AAOIX).\n    가운데 끼어 있는 건 우연이다.\n    """\n    b = base.upper()\n    if len(b) < 3:\n        return []\n    hit = []\n    for s in have:\n        o = s.split("/")[0].split(":")[0].upper()\n        if o == b or len(o) < 3:\n            continue\n        long_, short_ = (o, b) if len(o) > len(b) else (b, o)\n        if long_.startswith(short_) or long_.endswith(short_):\n            hit.append(s)\n    return sorted(hit)[:3]'
+
+
 # ── ㉔u 이미 붙인 느슨한 판을 갈아 끼운다 ──
 #
 # 처음 판은 'SKHYNIX/USDT:USDT' 가 있으면 'SKHYNIX/USDT' 도 봐줬다.
@@ -258,6 +280,8 @@ SITES = [
      "def tradable_only("),
     ("㉔u", "거르는 규칙과 부르는 규칙을 하나로 (이미 붙인 판만)",
      LOOSE_OLD, TIGHT_NEW, "실제로 부를 때 쓰는 규칙이 같아야"),
+    ("㉔n", "비슷한 이름 찾기를 좁힌다 (이미 붙인 판만)",
+     NEAR_OLD, NEAR_NEW, "가운데 끼어 있는 건 우연이다"),
     ("㉕", "SMMA 폭 계산 NaN 가드", SMMA_OLD, SMMA_NEW,
      "NaN 비교는 언제나 False라"),
     ("㉖a", "레벨 코멘트 모델 이름", MODEL_OLD, MODEL_NEW,
@@ -270,10 +294,15 @@ SITES = [
 def _near(base, have):
     """이름이 비슷한 시장 — 위 UNIV_NEW 안의 것과 같은 규칙."""
     b = base.upper()
+    if len(b) < 3:
+        return []
     hit = []
     for s in have:
         o = s.split("/")[0].split(":")[0].upper()
-        if o != b and (b in o or o in b):
+        if o == b or len(o) < 3:
+            continue
+        long_, short_ = (o, b) if len(o) > len(b) else (b, o)
+        if long_.startswith(short_) or long_.endswith(short_):
             hit.append(s)
     return sorted(hit)[:3]
 
