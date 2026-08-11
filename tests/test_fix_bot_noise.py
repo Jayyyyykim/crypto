@@ -174,7 +174,7 @@ class TestApply(Base):
         심볼을 봐줘서 로그가 안 조용해진다 — 갈아 끼워야 한다."""
         self.run_fx("--apply")
         loose = (self.read().replace(fx.TIGHT_NEW, fx.LOOSE_OLD)
-                             .replace(fx.NEAR_NEW, fx.NEAR_OLD))
+                            .replace(fx.NEAR_NEW, fx.NEAR_OLD))
         self.assertIn('(s + ":USDT") in have', loose)
         self.assertIn("if o != b and (b in o or o in b):", loose)
         self.write(loose)
@@ -184,14 +184,29 @@ class TestApply(Base):
             self.assertIn("적용 예정", line)
         self.run_fx("--apply")
         s = self.read()
+        ast.parse(s)          # ← 이걸 안 봐서 ㉔n 이 문법 오류로 나갔다
         self.assertIn("실제로 부를 때 쓰는 규칙이 같아야", s)
         self.assertIn("market_symbol", s)
-        self.assertIn("가운데 끼어 있는 건 우연이다", s)
+        self.assertIn("if len(b) < 3:", s)
         self.assertNotIn("if o != b and (b in o or o in b):", s)
 
     def test_result_still_parses(self):
         self.run_fx("--apply")
         ast.parse(self.read())
+
+    def test_every_replacement_is_valid_python_on_its_own(self):
+        """새 코드 조각 하나하나가 그 자리에 들어가서 말이 되나.
+
+        ㉔n 을 만들 때 독스트링 설명문을 코드 자리에 넣어서 문법
+        오류를 냈다 (--apply 의 ast 검사가 잡아 저장은 안 됐다).
+        자리마다 따로 확인하지 않으면 다음에 또 난다."""
+        for tag, label, old, new, _marker in fx.SITES:
+            wrapped_old = f"def _f():\n{old}\n" if old.startswith("    ") else old
+            wrapped_new = f"def _f():\n{new}\n" if old.startswith("    ") else new
+            try:
+                ast.parse(wrapped_new)
+            except SyntaxError as e:
+                self.fail(f"{tag} {label} 의 새 코드가 문법 오류: {e.msg}")
 
     def test_backup_is_made(self):
         self.run_fx("--apply")

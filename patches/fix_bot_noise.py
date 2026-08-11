@@ -254,10 +254,24 @@ ERR_NEW = """        result = r.json()
 # 'A' 가 'SKYAI' 안에 있다는 이유로 SKYAI(→A/USDT?) 를 찍었다.
 # 한 글자짜리 코인은 거의 모든 이름과 겹친다. 앞이나 뒤가 붙은
 # 꼴만 본다 (1000PEPE, AAOIX). 가운데 끼어 있는 건 우연이다.
-NEAR_OLD = '    b = base.upper()\n    hit = []\n    for s in have:\n        o = s.split("/")[0].split(":")[0].upper()\n        if o != b and (b in o or o in b):\n            hit.append(s)\n    return sorted(hit)[:3]'
+#
+# 여기는 **함수 몸통만** 갈아 끼운다. 설명은 주석 한 줄로 넣는다 —
+# 독스트링까지 같이 넣으려다 설명문이 코드 자리에 들어가서 문법
+# 오류를 냈다. (--apply 의 ast 검사가 잡아서 저장은 안 됐다.)
+NEAR_OLD = """    b = base.upper()
+    hit = []
+    for s in have:
+        o = s.split("/")[0].split(":")[0].upper()
+        if o != b and (b in o or o in b):
+            hit.append(s)
+    return sorted(hit)[:3]"""
 
-NEAR_NEW = '    \'들어 있으면 비슷하다\'로 보면 안 된다. SKYAI 를 A/USDT 로\n    짚은 적이 있다 — \'A\' 가 \'SKYAI\' 안에 있으니까. 한 글자짜리\n    코인은 거의 모든 이름과 겹친다.\n\n    그래서 **앞이나 뒤가 붙은 꼴**만 본다 (1000PEPE, AAOIX).\n    가운데 끼어 있는 건 우연이다.\n    """\n    b = base.upper()\n    if len(b) < 3:\n        return []\n    hit = []\n    for s in have:\n        o = s.split("/")[0].split(":")[0].upper()\n        if o == b or len(o) < 3:\n            continue\n        long_, short_ = (o, b) if len(o) > len(b) else (b, o)\n        if long_.startswith(short_) or long_.endswith(short_):\n            hit.append(s)\n    return sorted(hit)[:3]'
-
+# 위 UNIV_NEW 의 _near 몸통을 그대로 떼어 온다. 손으로 두 벌 적어
+# 두면 갈라지고, 갈라진 걸 아무도 모른다. (TIGHT_NEW 와 같은 이유)
+_NA = UNIV_NEW.index("    b = base.upper()")
+_NB = UNIV_NEW.index("    return sorted(hit)[:3]") + len("    return sorted(hit)[:3]")
+NEAR_NEW = UNIV_NEW[_NA:_NB]
+assert "if len(b) < 3:" in NEAR_NEW and NEAR_NEW in UNIV_NEW
 
 # ── ㉔u 이미 붙인 느슨한 판을 갈아 끼운다 ──
 #
@@ -281,7 +295,7 @@ SITES = [
     ("㉔u", "거르는 규칙과 부르는 규칙을 하나로 (이미 붙인 판만)",
      LOOSE_OLD, TIGHT_NEW, "실제로 부를 때 쓰는 규칙이 같아야"),
     ("㉔n", "비슷한 이름 찾기를 좁힌다 (이미 붙인 판만)",
-     NEAR_OLD, NEAR_NEW, "가운데 끼어 있는 건 우연이다"),
+     NEAR_OLD, NEAR_NEW, "    if len(b) < 3:"),
     ("㉕", "SMMA 폭 계산 NaN 가드", SMMA_OLD, SMMA_NEW,
      "NaN 비교는 언제나 False라"),
     ("㉖a", "레벨 코멘트 모델 이름", MODEL_OLD, MODEL_NEW,
