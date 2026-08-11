@@ -30,10 +30,14 @@ bot.py 를 고칩니다.
   Claude 오류가 그 사이에 파묻혀 있었습니다.
 
   → 종목을 이름으로 판단하지 않습니다. **거래소 상장 목록에 대고
-    물어봅니다.** 그 이름 그대로 실려 있으면 주식이든 뭐든 둡니다.
-    'SKHYNIX/USDT' 는 없고 'SKHYNIX/USDT:USDT' 만 있으면 뺍니다 —
-    종목이 진짜로 거래돼도 봇은 그 이름으로 못 부르고, 매시간
-    네 번 실패하는 건 똑같기 때문입니다. 화살표로 알려 줍니다.
+    물어봅니다.** 그 이름으로 부를 수 있으면 주식이든 뭐든 둡니다.
+
+    중요한 것은 **거르는 규칙과 부르는 규칙이 같아야 한다**는 것입니다.
+    이게 어긋난 게 이 버그의 정체였습니다 — 걸러 주는 쪽만 표기
+    차이를 봐주고 부르는 쪽은 그대로 실패하면, 로그는 안 조용해지고
+    화면에는 '다 통과했다'고 뜹니다. `fix_cvd_honest.py`(㉘)가
+    `market_symbol()` 을 넣으면 이 함수가 그걸 씁니다.
+
     목록은 한 시간 캐시하고, 목록을 못 받으면 거르지 않고 그대로
     갑니다 — 이 검사 때문에 페이퍼가 멈추면 그건 개선이 아닙니다.
 
@@ -132,12 +136,21 @@ def tradable_only(symbols):
             return symbols
     have = _MARKETS["syms"]
 
-    # **정확히 그 문자열**이 있어야 한다. 'SKHYNIX/USDT' 는 없고
-    # 'SKHYNIX/USDT:USDT' 만 있으면, 그 종목이 진짜로 거래되더라도
-    # 봇은 그 이름으로 못 부른다 — 매시간 네 번 실패하는 건 똑같다.
-    # 느슨하게 봐주면 로그가 안 조용해진다.
-    ok = [s for s in symbols if s in have]
-    gone = [s for s in symbols if s not in have]
+    # 거를 때 쓰는 규칙과 **실제로 부를 때 쓰는 규칙이 같아야 한다.**
+    # 이게 어긋난 게 이 버그의 정체였다 — 'SKHYNIX/USDT' 는 목록에
+    # 없고 'SKHYNIX/USDT:USDT' 만 있는데, 걸러 주는 쪽만 봐주고
+    # 부르는 쪽은 그대로 실패했다.
+    #
+    # market_symbol() 이 있으면 그걸 쓴다(㉘). 없으면 정확 일치다.
+    _resolve = globals().get("market_symbol")
+
+    def listed(s):
+        if _resolve:
+            return _resolve(s) is not None
+        return s in have
+
+    ok = [s for s in symbols if listed(s)]
+    gone = [s for s in symbols if not listed(s)]
 
     # 안전판: 거의 다 떨어지면 목록과 부르는 방식이 안 맞는 것이다
     # (예: 이 객체가 현물을 안 싣는다). 그때 거르면 페이퍼가 멈춘다.
@@ -226,20 +239,25 @@ ERR_NEW = """        result = r.json()
 
 # ── ㉔u 이미 붙인 느슨한 판을 갈아 끼운다 ──
 #
-# 처음 판은 'SKHYNIX/USDT:USDT' 가 있으면 'SKHYNIX/USDT' 도
-# 봐줬다. 종목이 진짜로 거래되니 떨어뜨리기 아깝다고 봤는데,
-# **봇은 그 이름으로 못 부른다.** 매시간 네 번 실패하는 건
-# 그대로였다. 느슨하게 봐주면 로그가 안 조용해진다.
+# 처음 판은 'SKHYNIX/USDT:USDT' 가 있으면 'SKHYNIX/USDT' 도 봐줬다.
+# 종목이 진짜로 거래되니 떨어뜨리기 아깝다고 봤는데 — **거르는 쪽만
+# 봐주고 부르는 쪽은 그대로 실패했다.** 두 규칙이 어긋나면 로그는
+# 안 조용해지는데 화면에는 '다 통과'로 뜬다.
 LOOSE_OLD = '    have = _MARKETS["syms"]\n\n    def listed(s):\n        # 무기한선물은 \'BTC/USDT:USDT\' 로도 실린다. 표기 차이로\n        # 멀쩡한 코인을 떨어뜨리면 이 검사가 손해다.\n        return s in have or (s + ":USDT") in have\n\n    ok = [s for s in symbols if listed(s)]\n    gone = [s for s in symbols if not listed(s)]\n    if gone and set(gone) != _MARKETS["said"]:\n        # 매시간 같은 줄을 다시 찍으면 그것도 소음이다. 목록이\n        # 바뀔 때만 말한다.\n        _MARKETS["said"] = set(gone)\n        names = []\n        for g in gone[:12]:\n            base = g.split("/")[0]\n            alt = _near(base, have)\n            names.append(base + (f"(→{alt[0]}?)" if alt else ""))\n        print(f"[페이퍼] 이 거래소 객체로 못 부름, 제외 {len(gone)}종: "\n              + ", ".join(names) + (" ..." if len(gone) > 12 else ""))'
 
-TIGHT_NEW = '    have = _MARKETS["syms"]\n\n    # **정확히 그 문자열**이 있어야 한다. \'SKHYNIX/USDT\' 는 없고\n    # \'SKHYNIX/USDT:USDT\' 만 있으면, 그 종목이 진짜로 거래되더라도\n    # 봇은 그 이름으로 못 부른다 — 매시간 네 번 실패하는 건 똑같다.\n    # 느슨하게 봐주면 로그가 안 조용해진다.\n    ok = [s for s in symbols if s in have]\n    gone = [s for s in symbols if s not in have]\n\n    # 안전판: 거의 다 떨어지면 목록과 부르는 방식이 안 맞는 것이다\n    # (예: 이 객체가 현물을 안 싣는다). 그때 거르면 페이퍼가 멈춘다.\n    if symbols and len(ok) < len(symbols) * 0.4:\n        print(f"[페이퍼] {len(gone)}/{len(symbols)}종이 목록에 없습니다. "\n              "목록과 조회 방식이 안 맞는 것 같아 거르지 않습니다.")\n        return symbols\n\n    if gone and set(gone) != _MARKETS["said"]:\n        # 매시간 같은 줄을 다시 찍으면 그것도 소음이다. 목록이\n        # 바뀔 때만 말한다.\n        _MARKETS["said"] = set(gone)\n        names = []\n        for g in gone[:12]:\n            base = g.split("/")[0]\n            perp = g + ":USDT"\n            alt = perp if perp in have else (_near(base, have) or [None])[0]\n            names.append(base + (f"(→{alt}?)" if alt else ""))\n        print(f"[페이퍼] 이 거래소 객체로 못 부름, 제외 {len(gone)}종: "\n              + ", ".join(names) + (" ..." if len(gone) > 12 else ""))'
+# 위 UNIV_NEW 에서 그대로 떼어 온다. 손으로 두 벌 적어 두면 언젠가
+# 갈라지고, 갈라진 걸 아무도 모른다.
+_A = UNIV_NEW.index('    have = _MARKETS["syms"]')
+_B = UNIV_NEW.index('        if any("\u2192" in n for n in names):')
+TIGHT_NEW = UNIV_NEW[_A:_B].rstrip("\n")
+assert TIGHT_NEW in UNIV_NEW and "market_symbol" in TIGHT_NEW
 
 
 SITES = [
     ("㉔", "페이퍼 유니버스 — 없는 심볼 제외", UNIV_OLD, UNIV_NEW,
      "def tradable_only("),
-    ("㉔u", "제외 판정을 정확 일치로 (이미 붙인 판만)", LOOSE_OLD, TIGHT_NEW,
-     "정확히 그 문자열"),
+    ("㉔u", "거르는 규칙과 부르는 규칙을 하나로 (이미 붙인 판만)",
+     LOOSE_OLD, TIGHT_NEW, "실제로 부를 때 쓰는 규칙이 같아야"),
     ("㉕", "SMMA 폭 계산 NaN 가드", SMMA_OLD, SMMA_NEW,
      "NaN 비교는 언제나 False라"),
     ("㉖a", "레벨 코멘트 모델 이름", MODEL_OLD, MODEL_NEW,

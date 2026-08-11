@@ -92,6 +92,7 @@
 | `fix_briefing_ctx.py` | 봉마감 브리핑에 역사적 문맥 한 줄 |
 | `fix_bot_noise.py` | 못 부르는 심볼이 로그를 덮어 진짜 오류가 묻혔다 · SMMA NaN · 모델 이름 |
 | `fix_daily_record.py` | **스캐너가 한 말을 앞으로 기록한다** — 원장이 봇에 안 붙어 있었다 |
+| `fix_cvd_honest.py` | 거르는 규칙과 부르는 규칙이 어긋났다 · 프롬프트가 CVD 를 아직 안 잰 걸로 알았다 |
 
 `fix_ask_context.py` 가 특히 그렇다. 봇의 시스템 프롬프트에 "펀비 극단 →
 역지표", "롱숏 쏠림 → 역지표", "비위남 시그널" 이 핵심 규칙으로 적혀
@@ -142,7 +143,7 @@ python3 demo_edge.py
 ## 쓰는 법
 
 ```bash
-python3 -m unittest discover -s tests -t .   # 835개 테스트
+python3 -m unittest discover -s tests -t .   # 859개 테스트
 python3 demo_edge.py
 ```
 

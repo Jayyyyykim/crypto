@@ -7,7 +7,7 @@
 
 고정하는 것:
   · ㉔ 없는 심볼만 거른다. 목록을 못 받으면 **거르지 않는다**
-  · ㉔ 'BTC/USDT:USDT' 표기의 진짜 코인을 떨어뜨리지 않는다
+  · ㉔ **거르는 규칙과 부르는 규칙이 같다** (어긋나면 로그가 안 조용해진다)
   · ㉔ 같은 제외 목록을 매번 다시 찍지 않는다 (그것도 소음이다)
   · ㉕ NaN 이 섞이면 '혼조'가 아니라 None
   · ㉖ 모델 이름이 나머지 호출부와 같다
@@ -173,14 +173,14 @@ class TestApply(Base):
         심볼을 봐줘서 로그가 안 조용해진다 — 갈아 끼워야 한다."""
         self.run_fx("--apply")
         loose = self.read().replace(fx.TIGHT_NEW, fx.LOOSE_OLD)
-        self.assertIn("def listed(s):", loose)
+        self.assertIn('(s + ":USDT") in have', loose)
         self.write(loose)
         rc, out = self.run_fx()
         line = next(l for l in out.splitlines() if "㉔u" in l)
         self.assertIn("적용 예정", line)
         self.run_fx("--apply")
-        self.assertIn("정확히 그 문자열", self.read())
-        self.assertNotIn("def listed(s):", self.read())
+        self.assertIn("실제로 부를 때 쓰는 규칙이 같아야", self.read())
+        self.assertIn("market_symbol", self.read())
 
     def test_result_still_parses(self):
         self.run_fx("--apply")
