@@ -32,6 +32,20 @@ CVD 이야기의 핵심은 언제나 **엇갈림(divergence)** 이다.
 이건 하루치 값으로는 만들 수 없다. 20일을 누적해야 나온다.
 그래서 이 시험대의 후보 열 개 중 넷이 엇갈림이다.
 
+엇갈림의 기준선은 0 이 아니다
+────────────────────────────
+실측에서 30종 **전부** 하루 델타 평균이 음수로 나왔다
+(−0.003 ~ −0.030). 자료 고장이 아니라 시장의 기울기다 — 칼럼이
+뒤바뀌었으면 값이 ±1 근처로 간다.
+
+작은 기울기지만 부호가 한쪽이라, 0 을 기준으로 재면
+
+    "CVD 가 음수"  1,252건        "CVD 가 양수"  24건 ← 판정 보류
+
+한쪽은 **잰 게 아니라 못 잰 것**이 된다. 그래서 엇갈림은 0 이
+아니라 **그 코인의 90일 중앙값**과 견준다. 값이 음수여도 '평소보다
+높다'가 잡힌다.
+
 누적을 어떻게 재나 — 절대값을 안 쓴다
 ──────────────────────────────────
 CVD 를 첫날부터 더하면 **시작점을 어디로 잡느냐에 따라 값이 통째로
@@ -193,6 +207,14 @@ def attach_cvd(d, cache, coin, taker=None):
         r = d[name].rolling(fb.PCT_WINDOW, min_periods=30)
         d[name + "_hi"] = r.quantile(fb.HI_Q)
         d[name + "_lo"] = r.quantile(fb.LO_Q)
+        # 엇갈림의 기준선은 0 이 아니라 **그 코인의 평소값**이다.
+        #
+        # 0 을 쓰면 안 되는 이유가 실측으로 나왔다. 30종 전부 하루
+        # 델타 평균이 음수였다(-0.003 ~ -0.030). 크기는 작지만 부호가
+        # 한쪽이라, 0 을 기준으로 "CVD 가 음수" 를 찾으면 1,252건이
+        # 잡히고 "양수" 는 24건뿐이다 — 한쪽은 30건 미만이라 판정
+        # 보류로 빠진다. **잰 게 아니라 못 잰 것이다.**
+        d[name + "_mid"] = r.quantile(0.5)
     return d
 
 
@@ -206,10 +228,15 @@ def _flag(d, i, c):
     return bool(v) if v == v else False
 
 
-def _sign(d, i, c):
-    """값의 부호. 없으면 None."""
-    v = fb._v(d, i, c)
-    return None if v is None else (1 if v > 0 else (-1 if v < 0 else 0))
+def _under(d, i, c):
+    """그 코인의 평소값보다 낮나. 0 이 아니라 중앙값과 견준다."""
+    a, m = fb._v(d, i, c), fb._v(d, i, c + "_mid")
+    return a is not None and m is not None and a < m
+
+
+def _over(d, i, c):
+    a, m = fb._v(d, i, c), fb._v(d, i, c + "_mid")
+    return a is not None and m is not None and a > m
 
 
 # ── 후보 ─────────────────────────────────────────────────────
@@ -230,10 +257,10 @@ CANDIDATES = [
      lambda d, i: fb._lo(d, i, "cvd_l")),
 
     # ② 엇갈림 — 누적이라야 만들 수 있는 것. CVD 이야기의 핵심.
-    ("약세 엇갈림: 가격 20일 신고가 · CVD 는 음수 → 숏", False,
-     lambda d, i: _flag(d, i, "px_new_hi") and _sign(d, i, "cvd_l") == -1),
-    ("강세 엇갈림: 가격 20일 신저가 · CVD 는 양수 → 롱", True,
-     lambda d, i: _flag(d, i, "px_new_lo") and _sign(d, i, "cvd_l") == 1),
+    ("약세 엇갈림: 가격 20일 신고가 · CVD 는 평소 이하 → 숏", False,
+     lambda d, i: _flag(d, i, "px_new_hi") and _under(d, i, "cvd_l")),
+    ("강세 엇갈림: 가격 20일 신저가 · CVD 는 평소 이상 → 롱", True,
+     lambda d, i: _flag(d, i, "px_new_lo") and _over(d, i, "cvd_l")),
 
     # ③ 확인 — 엇갈림의 반대. 가격과 CVD 가 같이 간다.
     ("확인: 가격 20일 신고가 · CVD 상위 → 롱", True,
@@ -297,10 +324,20 @@ def cmd_peek(path=CACHE):
             shares.append(sum(b - s for b, s in days.values()) / tot)
     if shares:
         pos = sum(1 for s in shares if s > 0)
-        print(f"\n  눈금 검사 — 델타 평균이 양수인 종목 {pos}/{len(shares)}")
-        if pos in (0, len(shares)) and len(shares) >= 5:
-            print("    ⚠️ 전부 한쪽입니다. 매수/매도 칼럼이 뒤바뀌었거나")
+        big = max(abs(s) for s in shares)
+        print(f"\n  눈금 검사 — 델타 평균이 양수인 종목 {pos}/{len(shares)}"
+              f" · 가장 큰 쏠림 {big:.3f}")
+        # 부호가 한쪽인 것만으로는 고장이 아니다. 칼럼이 뒤바뀌었거나
+        # 한쪽이 비었으면 값이 ±1 근처로 간다. 0.03 은 그냥 기울기다.
+        if big >= 0.30:
+            print("    ⚠️ 쏠림이 너무 큽니다. 매수/매도 칼럼이 뒤바뀌었거나")
             print("       한쪽만 채워졌을 수 있습니다. 위 칼럼 이름을 보십시오.")
+        elif pos in (0, len(shares)) and len(shares) >= 5:
+            print("    · 부호는 한쪽이지만 크기가 작습니다. 자료 고장이")
+            print("      아니라 시장의 기울기로 보입니다 — 매수는 지정가로,")
+            print("      매도는 시장가로 하는 쪽이 조금 더 많다는 뜻입니다.")
+            print("      그래서 엇갈림 판정은 0 이 아니라 **그 코인의")
+            print("      평소값(중앙값)** 과 견줍니다.")
         else:
             print("    양쪽에 흩어져 있습니다. 정상입니다.")
     print("=" * 78)

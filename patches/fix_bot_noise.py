@@ -30,7 +30,10 @@ bot.py 를 고칩니다.
   Claude 오류가 그 사이에 파묻혀 있었습니다.
 
   → 종목을 이름으로 판단하지 않습니다. **거래소 상장 목록에 대고
-    물어봅니다.** 목록에 있으면 주식이든 뭐든 그대로 둡니다.
+    물어봅니다.** 그 이름 그대로 실려 있으면 주식이든 뭐든 둡니다.
+    'SKHYNIX/USDT' 는 없고 'SKHYNIX/USDT:USDT' 만 있으면 뺍니다 —
+    종목이 진짜로 거래돼도 봇은 그 이름으로 못 부르고, 매시간
+    네 번 실패하는 건 똑같기 때문입니다. 화살표로 알려 줍니다.
     목록은 한 시간 캐시하고, 목록을 못 받으면 거르지 않고 그대로
     갑니다 — 이 검사 때문에 페이퍼가 멈추면 그건 개선이 아닙니다.
 
@@ -110,7 +113,7 @@ def tradable_only(symbols):
 
     종목을 이름으로 판단하지 않는다 — 상장 목록에 대고 물어본다.
     토큰화 주식(SKHYNIX·SAMSUNG·RKLB·AAOI)도 요즘은 코인 거래소에서
-    매매되므로, 목록에 있으면 그대로 둔다.
+    매매된다. 그 이름 그대로 실려 있으면 주식이든 뭐든 둔다.
 
     못 부르는 심볼 하나가 매시간 4개 타임프레임씩 실패하며 로그를
     덮는다. 스무 종이면 여든 줄이고, **그 소음에 진짜 오류가 묻힌다.**
@@ -129,13 +132,20 @@ def tradable_only(symbols):
             return symbols
     have = _MARKETS["syms"]
 
-    def listed(s):
-        # 무기한선물은 'BTC/USDT:USDT' 로도 실린다. 표기 차이로
-        # 멀쩡한 코인을 떨어뜨리면 이 검사가 손해다.
-        return s in have or (s + ":USDT") in have
+    # **정확히 그 문자열**이 있어야 한다. 'SKHYNIX/USDT' 는 없고
+    # 'SKHYNIX/USDT:USDT' 만 있으면, 그 종목이 진짜로 거래되더라도
+    # 봇은 그 이름으로 못 부른다 — 매시간 네 번 실패하는 건 똑같다.
+    # 느슨하게 봐주면 로그가 안 조용해진다.
+    ok = [s for s in symbols if s in have]
+    gone = [s for s in symbols if s not in have]
 
-    ok = [s for s in symbols if listed(s)]
-    gone = [s for s in symbols if not listed(s)]
+    # 안전판: 거의 다 떨어지면 목록과 부르는 방식이 안 맞는 것이다
+    # (예: 이 객체가 현물을 안 싣는다). 그때 거르면 페이퍼가 멈춘다.
+    if symbols and len(ok) < len(symbols) * 0.4:
+        print(f"[페이퍼] {len(gone)}/{len(symbols)}종이 목록에 없습니다. "
+              "목록과 조회 방식이 안 맞는 것 같아 거르지 않습니다.")
+        return symbols
+
     if gone and set(gone) != _MARKETS["said"]:
         # 매시간 같은 줄을 다시 찍으면 그것도 소음이다. 목록이
         # 바뀔 때만 말한다.
@@ -143,8 +153,9 @@ def tradable_only(symbols):
         names = []
         for g in gone[:12]:
             base = g.split("/")[0]
-            alt = _near(base, have)
-            names.append(base + (f"(→{alt[0]}?)" if alt else ""))
+            perp = g + ":USDT"
+            alt = perp if perp in have else (_near(base, have) or [None])[0]
+            names.append(base + (f"(→{alt}?)" if alt else ""))
         print(f"[페이퍼] 이 거래소 객체로 못 부름, 제외 {len(gone)}종: "
               + ", ".join(names) + (" ..." if len(gone) > 12 else ""))
         if any("→" in n for n in names):
@@ -213,9 +224,22 @@ ERR_NEW = """        result = r.json()
         comment = result['content'][0]['text']"""
 
 
+# ── ㉔u 이미 붙인 느슨한 판을 갈아 끼운다 ──
+#
+# 처음 판은 'SKHYNIX/USDT:USDT' 가 있으면 'SKHYNIX/USDT' 도
+# 봐줬다. 종목이 진짜로 거래되니 떨어뜨리기 아깝다고 봤는데,
+# **봇은 그 이름으로 못 부른다.** 매시간 네 번 실패하는 건
+# 그대로였다. 느슨하게 봐주면 로그가 안 조용해진다.
+LOOSE_OLD = '    have = _MARKETS["syms"]\n\n    def listed(s):\n        # 무기한선물은 \'BTC/USDT:USDT\' 로도 실린다. 표기 차이로\n        # 멀쩡한 코인을 떨어뜨리면 이 검사가 손해다.\n        return s in have or (s + ":USDT") in have\n\n    ok = [s for s in symbols if listed(s)]\n    gone = [s for s in symbols if not listed(s)]\n    if gone and set(gone) != _MARKETS["said"]:\n        # 매시간 같은 줄을 다시 찍으면 그것도 소음이다. 목록이\n        # 바뀔 때만 말한다.\n        _MARKETS["said"] = set(gone)\n        names = []\n        for g in gone[:12]:\n            base = g.split("/")[0]\n            alt = _near(base, have)\n            names.append(base + (f"(→{alt[0]}?)" if alt else ""))\n        print(f"[페이퍼] 이 거래소 객체로 못 부름, 제외 {len(gone)}종: "\n              + ", ".join(names) + (" ..." if len(gone) > 12 else ""))'
+
+TIGHT_NEW = '    have = _MARKETS["syms"]\n\n    # **정확히 그 문자열**이 있어야 한다. \'SKHYNIX/USDT\' 는 없고\n    # \'SKHYNIX/USDT:USDT\' 만 있으면, 그 종목이 진짜로 거래되더라도\n    # 봇은 그 이름으로 못 부른다 — 매시간 네 번 실패하는 건 똑같다.\n    # 느슨하게 봐주면 로그가 안 조용해진다.\n    ok = [s for s in symbols if s in have]\n    gone = [s for s in symbols if s not in have]\n\n    # 안전판: 거의 다 떨어지면 목록과 부르는 방식이 안 맞는 것이다\n    # (예: 이 객체가 현물을 안 싣는다). 그때 거르면 페이퍼가 멈춘다.\n    if symbols and len(ok) < len(symbols) * 0.4:\n        print(f"[페이퍼] {len(gone)}/{len(symbols)}종이 목록에 없습니다. "\n              "목록과 조회 방식이 안 맞는 것 같아 거르지 않습니다.")\n        return symbols\n\n    if gone and set(gone) != _MARKETS["said"]:\n        # 매시간 같은 줄을 다시 찍으면 그것도 소음이다. 목록이\n        # 바뀔 때만 말한다.\n        _MARKETS["said"] = set(gone)\n        names = []\n        for g in gone[:12]:\n            base = g.split("/")[0]\n            perp = g + ":USDT"\n            alt = perp if perp in have else (_near(base, have) or [None])[0]\n            names.append(base + (f"(→{alt}?)" if alt else ""))\n        print(f"[페이퍼] 이 거래소 객체로 못 부름, 제외 {len(gone)}종: "\n              + ", ".join(names) + (" ..." if len(gone) > 12 else ""))'
+
+
 SITES = [
     ("㉔", "페이퍼 유니버스 — 없는 심볼 제외", UNIV_OLD, UNIV_NEW,
      "def tradable_only("),
+    ("㉔u", "제외 판정을 정확 일치로 (이미 붙인 판만)", LOOSE_OLD, TIGHT_NEW,
+     "정확히 그 문자열"),
     ("㉕", "SMMA 폭 계산 NaN 가드", SMMA_OLD, SMMA_NEW,
      "NaN 비교는 언제나 False라"),
     ("㉖a", "레벨 코멘트 모델 이름", MODEL_OLD, MODEL_NEW,
@@ -276,9 +300,15 @@ def lookup(names, ex_name="bybit"):
     print(f"  실린 시장 {len(have)}개\n")
     for n in names:
         base = n.split("/")[0].strip().upper()
-        exact = [s for s in have if s.split("/")[0].split(":")[0].upper() == base]
-        if exact:
-            print(f"    ✅ {base:<10} {', '.join(sorted(exact)[:4])}")
+        plain = f"{base}/USDT"
+        if plain in have:
+            print(f"    ✅ {base:<10} {plain}")
+            continue
+        # 이름은 있는데 표기가 다르다 — 봇은 그 이름으로 못 부른다.
+        same = sorted(s for s in have
+                      if s.split("/")[0].split(":")[0].upper() == base)
+        if same:
+            print(f"    ⚠️  {base:<10} '{plain}' 는 없고: {', '.join(same[:3])}")
             continue
         alt = _near(base, have)
         if alt:
@@ -286,7 +316,8 @@ def lookup(names, ex_name="bybit"):
                   f"{', '.join(alt)}")
         else:
             print(f"    ❌ {base:<10} 목록에 없음")
-    print("\n  ✅ 는 페이퍼가 그대로 씁니다. ⚠️ 는 표기를 고치면 됩니다.")
+    print("\n  ✅ 만 페이퍼가 그대로 씁니다. ⚠️ 는 그 이름으로는 못 부르므로")
+    print("     제외되고, 화살표로 실제 표기를 알려 줍니다.")
     print("=" * 62)
     return 0
 

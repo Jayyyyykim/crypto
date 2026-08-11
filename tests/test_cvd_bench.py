@@ -138,7 +138,9 @@ class Frames(unittest.TestCase):
     def taker(self, n=None, buy=100.0, sell=50.0, coin="BTC"):
         n = n or self.N
         days = pd.date_range("2024-01-01", periods=n, freq="1D")
-        mk = (lambda i: (buy(i), sell(i))) if callable(buy) else (lambda i: (buy, sell))
+        fb_ = buy if callable(buy) else (lambda i: buy)
+        fs_ = sell if callable(sell) else (lambda i: sell)
+        mk = lambda i: (fb_(i), fs_(i))
         return {coin: {d.strftime("%Y-%m-%d"): mk(i) for i, d in enumerate(days)}}
 
 
@@ -251,17 +253,45 @@ class TestCandidates(Frames):
         self.assertGreaterEqual(sum("엇갈림" in n for n in names), 2)
 
     def test_bearish_divergence_fires_where_it_should(self):
-        # 가격은 계속 신고가, 테이커는 계속 매도 우위
+        # 가격은 계속 신고가, CVD 는 마지막에 평소보다 처진다
         d = fx.attach_cvd(self.frame(), {}, "BTC",
-                          self.taker(buy=20.0, sell=80.0))
+                          self.taker(buy=lambda i: 20.0 if i > 280 else 80.0,
+                                     sell=lambda i: 80.0 if i > 280 else 20.0))
         cond = next(c for n, _, c in fx.CANDIDATES if n.startswith("약세 엇갈림"))
         self.assertTrue(bool(cond(d, 300)))
 
     def test_bearish_divergence_stays_quiet_when_cvd_agrees(self):
         d = fx.attach_cvd(self.frame(), {}, "BTC",
-                          self.taker(buy=80.0, sell=20.0))
+                          self.taker(buy=lambda i: 80.0 if i > 280 else 20.0,
+                                     sell=lambda i: 20.0 if i > 280 else 80.0))
         cond = next(c for n, _, c in fx.CANDIDATES if n.startswith("약세 엇갈림"))
         self.assertFalse(bool(cond(d, 300)))
+
+    def test_divergence_line_is_not_zero(self):
+        """실측에서 30종 전부 델타 평균이 음수였다. 0 을 기준선으로
+        쓰면 '음수' 는 1,252건, '양수' 는 24건 — 한쪽은 30건 미만이라
+        판정 보류로 빠진다. 잰 게 아니라 못 잰 것이다."""
+        n = 400
+        # 항상 매도 우위지만, 뒤로 갈수록 덜하다
+        d = fx.attach_cvd(
+            self.frame(n), {}, "BTC",
+            self.taker(n, buy=lambda i: 40.0 + i * 0.05, sell=60.0))
+        self.assertLess(d["cvd_l"].iloc[350], 0, "여전히 매도 우위다")
+        over = next(c for n_, _, c in fx.CANDIDATES if n_.startswith("강세 엇갈림"))
+        # 값이 음수여도 '평소보다 높다' 는 잡혀야 한다
+        self.assertTrue(fx._over(d, 350, "cvd_l"),
+                        "0 을 기준으로 쓰고 있다 — 한쪽이 통째로 안 잡힌다")
+
+    def test_both_divergence_sides_are_reachable(self):
+        """한쪽만 잡히면 그 후보는 30건 미만으로 판정 보류가 된다."""
+        n = 400
+        d = fx.attach_cvd(
+            self.frame(n), {}, "BTC",
+            self.taker(n, buy=lambda i: 50.0 + 20.0 * ((i // 13) % 2),
+                       sell=60.0))
+        rng = range(200, n - 1)
+        self.assertGreater(sum(fx._under(d, i, "cvd_l") for i in rng), 20)
+        self.assertGreater(sum(fx._over(d, i, "cvd_l") for i in rng), 20)
 
     def test_it_is_not_measuring_the_daily_ratio_again(self):
         """하루치 비는 feature_bench 가 이미 쟀다. 같은 걸 또 재면

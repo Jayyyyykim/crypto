@@ -38,7 +38,7 @@
 하고 있던 것이 맞는지**를 재 보니, 맞지 않았다. `patches/` 는 그 측정과
 수리의 기록이다.
 
-**결론부터: 진입 시점을 고르는 규칙 60가지를 재서 통과한 것이 하나도 없다.**
+**결론부터: 진입 시점을 고르는 규칙 70가지를 재서 통과한 것이 하나도 없다.**
 근거는 [`FINDINGS.md`](FINDINGS.md) 에 있다. 3개월 뒤에 "SMA 크로스가
 좋아 보이던데"가 다시 나오면 거기를 보면 된다.
 
@@ -142,7 +142,7 @@ python3 demo_edge.py
 ## 쓰는 법
 
 ```bash
-python3 -m unittest discover -s tests -t .   # 831개 테스트
+python3 -m unittest discover -s tests -t .   # 835개 테스트
 python3 demo_edge.py
 ```
 

@@ -36,7 +36,7 @@ fx = load_patch("fix_bot_noise")
 BOT = '''class _Ex:
     fail = False
     calls = 0
-    syms = ["BTC/USDT", "ETH/USDT", "XRP/USDT:USDT"]
+    syms = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "ADA/USDT", "XRP/USDT:USDT"]
 
     def load_markets(self):
         _Ex.calls += 1
@@ -49,7 +49,7 @@ exchange = _Ex()
 PAPER_COINS = []
 PAPER_MAX_COINS = 30
 PAPER_MIN_USDT_VOLUME = 0
-UNIVERSE = ["BTC/USDT", "SKHYNIX/USDT", "XRP/USDT"]
+UNIVERSE = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "ADA/USDT", "SKHYNIX/USDT"]
 
 
 def select_paper_universe(coins, max_coins=0, min_usdt_volume=0):
@@ -158,9 +158,29 @@ class TestApply(Base):
         self.assertIn("적용 예정", out)
         self.assertEqual(rc, 0)
 
-    def test_all_four_sites_are_found(self):
+    def test_every_fresh_site_is_found(self):
+        """㉔u 는 이미 붙인 판을 갈아 끼우는 자리라, 새 봇에는
+        해당 없음이 정상이다. 나머지는 전부 찾아야 한다."""
         rc, out = self.run_fx()
-        self.assertNotIn("대상 없음", out)
+        body = [l for l in out.splitlines() if l.startswith("    ")]
+        for tag in ("㉔ ", "㉕ ", "㉖a", "㉖b"):
+            line = next(l for l in body if tag in l)
+            self.assertIn("적용 예정", line, f"{tag} 자리를 못 찾았다")
+        self.assertEqual(out.count("대상 없음"), 1)
+
+    def test_the_loose_version_gets_upgraded(self):
+        """느슨한 판을 이미 붙인 봇이 있다. 그 판은 표기가 다른
+        심볼을 봐줘서 로그가 안 조용해진다 — 갈아 끼워야 한다."""
+        self.run_fx("--apply")
+        loose = self.read().replace(fx.TIGHT_NEW, fx.LOOSE_OLD)
+        self.assertIn("def listed(s):", loose)
+        self.write(loose)
+        rc, out = self.run_fx()
+        line = next(l for l in out.splitlines() if "㉔u" in l)
+        self.assertIn("적용 예정", line)
+        self.run_fx("--apply")
+        self.assertIn("정확히 그 문자열", self.read())
+        self.assertNotIn("def listed(s):", self.read())
 
     def test_result_still_parses(self):
         self.run_fx("--apply")
@@ -206,19 +226,36 @@ class TestUniverse(Base):
         m.exchange.__class__.fail = False
         return m
 
-    def test_stock_symbols_are_dropped(self):
+    def test_unfetchable_symbols_are_dropped(self):
         m = self.bot()
         with redirect_stdout(io.StringIO()):
             got = m.get_paper_coins()
         self.assertNotIn("SKHYNIX/USDT", got)
         self.assertIn("BTC/USDT", got)
 
-    def test_perp_notation_coin_is_kept(self):
-        """거래소가 'XRP/USDT:USDT' 로만 실어도 XRP 는 진짜 코인이다."""
+    def test_it_does_not_filter_when_almost_everything_would_go(self):
+        """거의 다 떨어지면 목록과 조회 방식이 안 맞는 것이다
+        (예: 이 객체가 현물을 안 싣는다). 그때 거르면 페이퍼가 멈춘다."""
         m = self.bot()
-        with redirect_stdout(io.StringIO()):
+        m.exchange.__class__.syms = ["BTC/USDT"]
+        m._MARKETS["syms"] = set()
+        out = io.StringIO()
+        with redirect_stdout(out):
             got = m.get_paper_coins()
-        self.assertIn("XRP/USDT", got)
+        self.assertEqual(len(got), 5, "전부 걸러서 페이퍼가 멈췄다")
+        self.assertIn("거르지 않습니다", out.getvalue())
+
+    def test_perp_only_symbol_is_dropped_but_named(self):
+        """거래소가 'XRP/USDT:USDT' 로만 실으면 XRP 는 진짜 종목이지만
+        **봇은 'XRP/USDT' 라는 이름으로 못 부른다.** 봐주면 매시간
+        네 번 실패하는 게 그대로다 — 로그가 안 조용해진다."""
+        m = self.bot()
+        m.UNIVERSE = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]
+        out = io.StringIO()
+        with redirect_stdout(out):
+            got = m.get_paper_coins()
+        self.assertNotIn("XRP/USDT", got)
+        self.assertIn("XRP(→XRP/USDT:USDT?)", out.getvalue())
 
     def test_it_says_what_it_dropped(self):
         m = self.bot()
@@ -235,6 +272,7 @@ class TestUniverse(Base):
         m.exchange.__class__.syms = ["BTC/USDT", "SKHYNIX/USDT"]
         m._MARKETS["syms"] = set()
         m.UNIVERSE = ["BTC/USDT", "SKHYNIX/USDT"]
+        m.exchange.__class__.calls = 0
         out = io.StringIO()
         with redirect_stdout(out):
             got = m.get_paper_coins()
@@ -244,9 +282,10 @@ class TestUniverse(Base):
     def test_a_notation_difference_is_pointed_out(self):
         """조용히 버리는 게 이 검사의 유일한 위험이다 — 화면에 남긴다."""
         m = self.bot()
-        m.exchange.__class__.syms = ["BTC/USDT", "AAOIX/USDT"]
+        m.exchange.__class__.syms = ["BTC/USDT", "ETH/USDT", "SOL/USDT",
+                                     "AAOIX/USDT"]
         m._MARKETS["syms"] = set()
-        m.UNIVERSE = ["BTC/USDT", "AAOI/USDT"]
+        m.UNIVERSE = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "AAOI/USDT"]
         out = io.StringIO()
         with redirect_stdout(out):
             m.get_paper_coins()
@@ -275,7 +314,8 @@ class TestUniverse(Base):
         m = self.bot()
         with redirect_stdout(io.StringIO()):
             m.get_paper_coins()
-        m.UNIVERSE = ["BTC/USDT", "SKHYNIX/USDT", "SAMSUNG/USDT"]
+        m.UNIVERSE = ["BTC/USDT", "ETH/USDT", "SOL/USDT",
+                      "SKHYNIX/USDT", "SAMSUNG/USDT"]
         out = io.StringIO()
         with redirect_stdout(out):
             m.get_paper_coins()
@@ -297,7 +337,7 @@ class TestUniverse(Base):
         out = io.StringIO()
         with redirect_stdout(out):
             got = m.get_paper_coins()
-        self.assertEqual(got, ["BTC/USDT", "SKHYNIX/USDT", "XRP/USDT"])
+        self.assertEqual(got, list(m.UNIVERSE))
         self.assertIn("그대로 갑니다", out.getvalue())
 
     def test_nothing_is_dropped_when_everything_is_listed(self):
