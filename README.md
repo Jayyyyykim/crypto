@@ -84,7 +84,7 @@
 | `fix_honest_report.py` | 확정 손실 신호(중기숏)를 페이퍼가 계속 잡았다 |
 | `fix_ask_context.py` | **AI 프롬프트가 측정으로 부정된 규칙을 가르치고 있었다** |
 | `fix_briefing_ctx.py` | 봉마감 브리핑에 역사적 문맥 한 줄 |
-| `fix_bot_noise.py` | 주식 심볼이 페이퍼 대상에 · SMMA NaN · 레벨 코멘트 모델 이름 |
+| `fix_bot_noise.py` | 못 부르는 심볼이 로그를 덮어 진짜 오류가 묻혔다 · SMMA NaN · 모델 이름 |
 
 `fix_ask_context.py` 가 특히 그렇다. 봇의 시스템 프롬프트에 "펀비 극단 →
 역지표", "롱숏 쏠림 → 역지표", "비위남 시그널" 이 핵심 규칙으로 적혀
@@ -135,7 +135,7 @@ python3 demo_edge.py
 ## 쓰는 법
 
 ```bash
-python3 -m unittest discover -s tests -t .   # 763개 테스트
+python3 -m unittest discover -s tests -t .   # 773개 테스트
 python3 demo_edge.py
 ```
 

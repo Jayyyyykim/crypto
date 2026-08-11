@@ -225,8 +225,41 @@ class TestUniverse(Base):
         out = io.StringIO()
         with redirect_stdout(out):
             m.get_paper_coins()
-        self.assertIn("거래소에 없어 제외 1종", out.getvalue())
+        self.assertIn("제외 1종", out.getvalue())
         self.assertIn("SKHYNIX", out.getvalue())
+
+    def test_a_tokenized_stock_that_is_listed_survives(self):
+        """토큰화 주식도 코인 거래소에서 매매된다. 이름으로 판단하면
+        멀쩡히 거래되는 종목을 버린다."""
+        m = self.bot()
+        m.exchange.__class__.syms = ["BTC/USDT", "SKHYNIX/USDT"]
+        m._MARKETS["syms"] = set()
+        m.UNIVERSE = ["BTC/USDT", "SKHYNIX/USDT"]
+        out = io.StringIO()
+        with redirect_stdout(out):
+            got = m.get_paper_coins()
+        self.assertIn("SKHYNIX/USDT", got)
+        self.assertNotIn("제외", out.getvalue())
+
+    def test_a_notation_difference_is_pointed_out(self):
+        """조용히 버리는 게 이 검사의 유일한 위험이다 — 화면에 남긴다."""
+        m = self.bot()
+        m.exchange.__class__.syms = ["BTC/USDT", "AAOIX/USDT"]
+        m._MARKETS["syms"] = set()
+        m.UNIVERSE = ["BTC/USDT", "AAOI/USDT"]
+        out = io.StringIO()
+        with redirect_stdout(out):
+            m.get_paper_coins()
+        self.assertIn("AAOI(→AAOIX/USDT?)", out.getvalue())
+        self.assertIn("표기만 다른 것일 수 있습니다", out.getvalue())
+
+    def test_no_arrow_when_nothing_is_similar(self):
+        m = self.bot()
+        out = io.StringIO()
+        with redirect_stdout(out):
+            m.get_paper_coins()
+        self.assertNotIn("→", out.getvalue())
+        self.assertNotIn("표기만 다른", out.getvalue())
 
     def test_it_does_not_repeat_the_same_list(self):
         """매시간 같은 줄을 다시 찍으면 그것도 소음이다."""
@@ -275,6 +308,55 @@ class TestUniverse(Base):
             got = m.get_paper_coins()
         self.assertEqual(got, ["BTC/USDT", "ETH/USDT"])
         self.assertNotIn("제외", out.getvalue())
+
+
+class TestNear(unittest.TestCase):
+    """이름이 비슷한 것 찾기 — 표기 차이를 사람 눈에 보여 주는 부분."""
+
+    HAVE = ["BTC/USDT", "AAOIX/USDT", "1000PEPE/USDT:USDT", "SOL/USDT"]
+
+    def test_suffix_form(self):
+        self.assertEqual(fx._near("AAOI", self.HAVE), ["AAOIX/USDT"])
+
+    def test_prefix_form(self):
+        self.assertEqual(fx._near("PEPE", self.HAVE), ["1000PEPE/USDT:USDT"])
+
+    def test_exact_match_is_not_a_suggestion(self):
+        self.assertEqual(fx._near("BTC", self.HAVE), [])
+
+    def test_nothing_similar(self):
+        self.assertEqual(fx._near("SKHYNIX", self.HAVE), [])
+
+
+class TestSymbolLookup(unittest.TestCase):
+    """--symbols 는 봇을 안 켜고 거래소에만 물어본다."""
+
+    def setUp(self):
+        self.real = fx.lookup
+        self.seen = []
+        fx.lookup = lambda names, ex_name="bybit": (self.seen.append(names) or 0)
+
+    def tearDown(self):
+        fx.lookup = self.real
+
+    def run_fx(self, *args):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            rc = fx.main(["fix_bot_noise.py", *args])
+        return rc, out.getvalue()
+
+    def test_space_form(self):
+        self.run_fx("--symbols", "SKHYNIX,AAOI")
+        self.assertEqual(self.seen, [["SKHYNIX", "AAOI"]])
+
+    def test_equals_form(self):
+        self.run_fx("--symbols=SKHYNIX")
+        self.assertEqual(self.seen, [["SKHYNIX"]])
+
+    def test_it_does_not_touch_bot_py(self):
+        """이건 조회다. bot.py 가 없어도 돌아야 한다."""
+        rc, out = self.run_fx("--symbols", "BTC")
+        self.assertEqual(rc, 0)
 
 
 class TestSmma(Base):

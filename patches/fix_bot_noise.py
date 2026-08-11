@@ -9,24 +9,37 @@ bot.py 를 고칩니다.
 
 ────────────────────────────────────────────────────────────
 
-㉔ 주식 심볼이 페이퍼 대상에 들어가 있다
+㉔ 이 봇의 거래소 객체로는 못 부르는 심볼이 페이퍼 대상에 있다
 
     데이터 수집 오류 (SKHYNIX/USDT 1d): bybit does not have market symbol
     데이터 수집 오류 (SAMSUNG/USDT 1d): ...
     데이터 수집 오류 (RKLB/USDT 1d): ...
     데이터 수집 오류 (龙虾/USDT 1d): ...
 
-  SKHYNIX·SAMSUNG·RKLB·AAOI·SPCX·DRAM 은 **주식**입니다. 스캔 캐시에
-  다른 시장 심볼이 섞여 들어와 그대로 페이퍼 유니버스에 올라갔습니다.
+  SKHYNIX·SAMSUNG·RKLB·AAOI 는 토큰화 주식입니다. 요즘은 코인
+  거래소에서도 매매됩니다 — 즉 **가짜 심볼이라 단정할 수 없습니다.**
+  확실한 건 하나뿐입니다: 봇이 쓰는 이 거래소 객체가 저 이름으로는
+  못 부릅니다. 이유는 셋 중 하나입니다.
+      · 이 거래소에 없다
+      · 있는데 표기가 다르다 (예: 접미사 X, 1000 접두사)
+      · 있는데 이 객체의 시장 종류(선물/현물)에 안 잡힌다
 
-  이게 왜 문제인가 — 없는 심볼 하나가 매시간 **4개 타임프레임**씩
-  조회에 실패하며 로그를 덮습니다. 스무 종이면 여든 줄입니다.
+  왜 고치나 — 못 부르는 심볼 하나가 매시간 **4개 타임프레임**씩
+  실패하며 로그를 덮습니다. 스무 종이면 여든 줄입니다.
   **그 소음에 진짜 오류가 묻힙니다.** 실제로 이번 로그에서 NaN 경고와
   Claude 오류가 그 사이에 파묻혀 있었습니다.
 
-  → 거래소가 실제로 상장한 목록으로 한 번 거릅니다. 목록은 한 시간
-    캐시합니다. 목록을 못 받으면 거르지 않고 그대로 갑니다 —
-    이 검사 때문에 페이퍼가 멈추면 그건 개선이 아닙니다.
+  → 종목을 이름으로 판단하지 않습니다. **거래소 상장 목록에 대고
+    물어봅니다.** 목록에 있으면 주식이든 뭐든 그대로 둡니다.
+    목록은 한 시간 캐시하고, 목록을 못 받으면 거르지 않고 그대로
+    갑니다 — 이 검사 때문에 페이퍼가 멈추면 그건 개선이 아닙니다.
+
+  → 그리고 뺀 것마다 **비슷한 이름이 목록에 있으면 같이 찍습니다.**
+    표기만 다른 진짜 종목을 조용히 버리는 게 이 패치의 유일한
+    위험이라, 그걸 화면에 남깁니다.
+
+        python fix_bot_noise.py --symbols SKHYNIX,SAMSUNG,RKLB
+    로 봇을 안 켜고도 거래소에 뭐가 실려 있는지 볼 수 있습니다.
 
 ㉕ SMMA 폭 계산에 NaN 이 들어간다
 
@@ -77,12 +90,29 @@ UNIV_OLD = '''def get_paper_coins():
 UNIV_NEW = '''_MARKETS = {"at": 0.0, "syms": set(), "said": set()}
 
 
-def tradable_only(symbols):
-    """이 거래소에 실제로 있는 심볼만 남긴다.
+def _near(base, have):
+    """목록에서 이름이 비슷한 것 — 표기만 다른 것일 수 있다.
 
-    스캔 캐시에 다른 시장 것이 섞여 들어온다 — SKHYNIX·SAMSUNG·
-    RKLB·AAOI(주식)와 龙虾 까지 페이퍼 대상에 올라와 있었다.
-    없는 심볼 하나가 매시간 4개 타임프레임씩 조회에 실패하며 로그를
+    SKHYNIX·AAOI 같은 토큰화 주식은 코인 거래소에서도 매매된다.
+    이름만 보고 '주식이니 가짜'라고 판단하면 안 된다.
+    """
+    b = base.upper()
+    hit = []
+    for s in have:
+        o = s.split("/")[0].split(":")[0].upper()
+        if o != b and (b in o or o in b):
+            hit.append(s)
+    return sorted(hit)[:3]
+
+
+def tradable_only(symbols):
+    """이 거래소 객체로 실제로 부를 수 있는 심볼만 남긴다.
+
+    종목을 이름으로 판단하지 않는다 — 상장 목록에 대고 물어본다.
+    토큰화 주식(SKHYNIX·SAMSUNG·RKLB·AAOI)도 요즘은 코인 거래소에서
+    매매되므로, 목록에 있으면 그대로 둔다.
+
+    못 부르는 심볼 하나가 매시간 4개 타임프레임씩 실패하며 로그를
     덮는다. 스무 종이면 여든 줄이고, **그 소음에 진짜 오류가 묻힌다.**
 
     상장 목록을 못 받으면 거르지 않고 그대로 간다. 이 검사 때문에
@@ -110,9 +140,18 @@ def tradable_only(symbols):
         # 매시간 같은 줄을 다시 찍으면 그것도 소음이다. 목록이
         # 바뀔 때만 말한다.
         _MARKETS["said"] = set(gone)
-        print(f"[페이퍼] 거래소에 없어 제외 {len(gone)}종: "
-              + ", ".join(g.replace("/USDT", "") for g in gone[:12])
-              + (" ..." if len(gone) > 12 else ""))
+        names = []
+        for g in gone[:12]:
+            base = g.split("/")[0]
+            alt = _near(base, have)
+            names.append(base + (f"(→{alt[0]}?)" if alt else ""))
+        print(f"[페이퍼] 이 거래소 객체로 못 부름, 제외 {len(gone)}종: "
+              + ", ".join(names) + (" ..." if len(gone) > 12 else ""))
+        if any("→" in n for n in names):
+            # 표기만 다른 진짜 종목을 조용히 버리는 게 이 검사의
+            # 유일한 위험이다. 화살표가 보이면 그거다.
+            print("        └ 화살표는 표기만 다른 것일 수 있습니다. "
+                  "맞으면 스캔 심볼을 그 이름으로 고치십시오.")
     return ok
 
 
@@ -186,6 +225,17 @@ SITES = [
 ]
 
 
+def _near(base, have):
+    """이름이 비슷한 시장 — 위 UNIV_NEW 안의 것과 같은 규칙."""
+    b = base.upper()
+    hit = []
+    for s in have:
+        o = s.split("/")[0].split(":")[0].upper()
+        if o != b and (b in o or o in b):
+            hit.append(s)
+    return sorted(hit)[:3]
+
+
 def find(name="bot.py"):
     for cand in (os.path.join(os.getcwd(), name),
                  os.path.join(os.path.dirname(os.path.abspath(__file__)), name)):
@@ -202,9 +252,54 @@ def status_of(src, old, marker):
     return GONE
 
 
+def lookup(names, ex_name="bybit"):
+    """거래소에 이 이름들이 실제로 실려 있나 — 봇을 안 켜고 본다.
+
+    토큰화 주식이 코인 거래소에서 매매되는 지금, '이건 주식이니까
+    가짜'라는 판단은 틀린다. 목록에 물어보는 수밖에 없다.
+    """
+    print("=" * 62)
+    print(f"  {ex_name} 상장 목록 조회")
+    print("=" * 62)
+    try:
+        import ccxt
+    except ImportError:
+        print("\n  ccxt 가 없습니다. 봇 폴더에서 실행하십시오.")
+        return 1
+    try:
+        ex = getattr(ccxt, ex_name)()
+        have = list(ex.load_markets().keys())
+    except Exception as e:
+        print(f"\n  목록을 못 받았습니다: {type(e).__name__}: {e}")
+        return 1
+
+    print(f"  실린 시장 {len(have)}개\n")
+    for n in names:
+        base = n.split("/")[0].strip().upper()
+        exact = [s for s in have if s.split("/")[0].split(":")[0].upper() == base]
+        if exact:
+            print(f"    ✅ {base:<10} {', '.join(sorted(exact)[:4])}")
+            continue
+        alt = _near(base, have)
+        if alt:
+            print(f"    ⚠️  {base:<10} 그 이름은 없고, 비슷한 것: "
+                  f"{', '.join(alt)}")
+        else:
+            print(f"    ❌ {base:<10} 목록에 없음")
+    print("\n  ✅ 는 페이퍼가 그대로 씁니다. ⚠️ 는 표기를 고치면 됩니다.")
+    print("=" * 62)
+    return 0
+
+
 def main(argv):
     apply = "--apply" in argv
     verify = "--verify" in argv
+
+    for i, a in enumerate(argv):
+        if a == "--symbols" and i + 1 < len(argv):
+            return lookup([x for x in argv[i + 1].split(",") if x.strip()])
+        if a.startswith("--symbols="):
+            return lookup([x for x in a.split("=", 1)[1].split(",") if x.strip()])
 
     path = find()
     print("=" * 62)
@@ -277,10 +372,14 @@ def main(argv):
 
   다음 페이퍼 스캔(매시)에 이런 줄이 한 번 뜨고, 그 뒤로 조용해집니다.
 
-      [페이퍼] 거래소에 없어 제외 21종: SKYAI, NIL, KAITO, AAOI, ...
+      [페이퍼] 이 거래소 객체로 못 부름, 제외 21종: SKYAI, NIL,
+              AAOI(→AAOIX/USDT?), ...
 
-  그 목록에 **진짜 코인**이 섞여 있으면 알려 주십시오 — 심볼 표기가
-  다른 것일 수 있습니다(예: 1000PEPE).""")
+  화살표가 붙은 것은 **표기만 다른 진짜 종목**일 수 있습니다.
+  토큰화 주식도 요즘은 코인 거래소에서 매매되므로, 이름만 보고
+  가짜라고 판단하지 않습니다. 직접 확인하려면:
+
+      python fix_bot_noise.py --symbols SKHYNIX,SAMSUNG,RKLB,AAOI""")
     return 0
 
 
