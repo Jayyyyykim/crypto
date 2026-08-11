@@ -547,8 +547,16 @@ def ohlcv(sym, coin, days):
     return best if best_n >= MIN_BARS else None
 
 
-def run(coins, days, cache):
-    hits = {n: [] for n, _, _ in CANDIDATES}
+def run(coins, days, cache, candidates=None, attach_fn=None):
+    """후보와 값 붙이는 법만 갈아 끼울 수 있다.
+
+    cvd_bench 가 이 함수를 그대로 쓴다. 판정 방식(무작위 기준선·
+    두 기간 게이트·손절 1.5×ATR)이 도구마다 달라지면 결과를 나란히
+    놓을 수 없다. **재는 자는 하나여야 한다.**
+    """
+    candidates = candidates or CANDIDATES
+    attach_fn = attach_fn or attach
+    hits = {n: [] for n, _, _ in candidates}
     base = {True: [], False: []}
     failed, nodata = [], []
 
@@ -564,7 +572,7 @@ def run(coins, days, cache):
                 # 틀린 건지 과거가 짧은 건지 알 수 없다.
                 failed.append(f"{coin}({LAST_LEN.get(coin, 0)}봉)")
                 continue
-            d = attach(bt.compute_indicators(df), cache, coin)
+            d = attach_fn(bt.compute_indicators(df), cache, coin)
         except Exception as e:
             print(f"  [건너뜀] {coin}: {type(e).__name__}: {e}")
             failed.append(coin)
@@ -573,7 +581,7 @@ def run(coins, days, cache):
         for side in (True, False):
             base[side].extend(sb.random_trades(d, coin, side, n=SAMPLES_PER_COIN))
 
-        for name, long_side, cond in CANDIDATES:
+        for name, long_side, cond in candidates:
             free = -1
             for i in range(WARMUP, len(d) - 1):
                 if i <= free:

@@ -42,6 +42,11 @@
 근거는 [`FINDINGS.md`](FINDINGS.md) 에 있다. 3개월 뒤에 "SMA 크로스가
 좋아 보이던데"가 다시 나오면 거기를 보면 된다.
 
+과거 자료 되짚기는 여기까지다. 같은 4년에 71번째 규칙을 들이대는 건
+값이 떨어진다 — 후보가 많을수록 그중 하나가 우연히 좋아 보일 확률만
+높아진다. 새 정보가 나오는 곳은 **앞으로 쌓는 기록**뿐이고,
+`fix_daily_record.py` 가 그걸 봇에 붙인다.
+
 ### 재는 도구
 
 모두 읽기 전용이고, 같은 판정 방식을 쓴다 — **같은 코인·같은 기간·같은
@@ -56,6 +61,7 @@
 | `funding_bench.py` | 펀딩비 진입 규칙 |
 | `feature_bench.py` | **비가격** — 미결제약정·롱숏비·테이커·펀딩 15가지 |
 | `tf_bench.py` | 같은 규칙을 4시간봉·1시간봉에서. `--cost` 로 시간대별 비용부터 |
+| `cvd_bench.py` | **누적** 거래량 델타 10가지 — 엇갈림 포함. 마지막 구멍 |
 | `diag_baseline.py` | 무작위 진입 자체의 성적 — 눈금이 맞는지 확인하는 자 |
 | `diag_regime.py` | 통과한 것이 장세 덕인지 (상승장/하락장 분리) |
 | `diag_funnel.py` · `diag_data.py` | 신호가 왜 안 나오나 · 자료가 실제로 몇 년치 왔나 |
@@ -85,6 +91,7 @@
 | `fix_ask_context.py` | **AI 프롬프트가 측정으로 부정된 규칙을 가르치고 있었다** |
 | `fix_briefing_ctx.py` | 봉마감 브리핑에 역사적 문맥 한 줄 |
 | `fix_bot_noise.py` | 못 부르는 심볼이 로그를 덮어 진짜 오류가 묻혔다 · SMMA NaN · 모델 이름 |
+| `fix_daily_record.py` | **스캐너가 한 말을 앞으로 기록한다** — 원장이 봇에 안 붙어 있었다 |
 
 `fix_ask_context.py` 가 특히 그렇다. 봇의 시스템 프롬프트에 "펀비 극단 →
 역지표", "롱숏 쏠림 → 역지표", "비위남 시그널" 이 핵심 규칙으로 적혀
@@ -135,7 +142,7 @@ python3 demo_edge.py
 ## 쓰는 법
 
 ```bash
-python3 -m unittest discover -s tests -t .   # 773개 테스트
+python3 -m unittest discover -s tests -t .   # 831개 테스트
 python3 demo_edge.py
 ```
 
