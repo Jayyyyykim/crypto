@@ -174,6 +174,28 @@ class TestCheckCommand(unittest.TestCase):
             rc = fx.check(["없는파일_12345.csv"])
         self.assertEqual(rc, 1)
 
+    def test_an_unmatched_pattern_says_so(self):
+        """윈도우 cmd 는 *.csv 를 안 풀어 준다. 그걸 그대로 열려고 하면
+        [Errno 22] 라는 알 수 없는 소리가 난다 — 실제로 그랬다."""
+        import io
+        import os
+        import tempfile
+        from contextlib import redirect_stdout
+        old = os.getcwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.chdir(tmp)
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    rc = fx.check(["*.csv"])
+            finally:
+                os.chdir(old)
+        self.assertEqual(rc, 1)
+        t = out.getvalue()
+        self.assertIn("맞는 파일이 없습니다", t)
+        self.assertIn("지금 폴더", t)
+        self.assertNotIn("Errno", t)
+
 
 if __name__ == "__main__":
     unittest.main()

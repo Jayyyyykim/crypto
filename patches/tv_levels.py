@@ -151,11 +151,27 @@ def check(paths):
         print("  pandas 가 필요합니다.")
         return 1
 
-    files = []
+    files, empty = [], []
     for p in paths:
-        files.extend(sorted(glob.glob(p)) or [p])
+        hit = sorted(glob.glob(p))
+        if hit:
+            files.extend(hit)
+        elif any(ch in p for ch in "*?["):
+            # 무늬인데 맞는 파일이 없다. 그 무늬를 그대로 열려고 하면
+            # [Errno 22] 같은 알 수 없는 소리가 난다 — 윈도우 cmd 는
+            # 무늬를 안 풀어 주므로 파이썬까지 그대로 온다.
+            empty.append(p)
+        else:
+            files.append(p)
+    if empty:
+        import os as _os
+        print(f"\n  '{', '.join(empty)}' 에 맞는 파일이 없습니다.")
+        print(f"  지금 폴더: {_os.getcwd()}")
+        here = sorted(glob.glob("*.csv"))
+        print("  이 폴더의 CSV: " + (", ".join(here[:8]) if here else "없음"))
+        print("\n  내려받은 곳에서 실행하거나 경로를 그대로 적으십시오:")
+        print(r"      python tv_levels.py --check %USERPROFILE%\Downloads\*.csv")
     if not files:
-        print("  CSV 를 못 찾았습니다.")
         return 1
 
     print("=" * 72)

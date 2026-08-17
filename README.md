@@ -145,7 +145,7 @@ python3 demo_edge.py
 ## 쓰는 법
 
 ```bash
-python3 -m unittest discover -s tests -t .   # 894개 테스트
+python3 -m unittest discover -s tests -t .   # 895개 테스트
 python3 demo_edge.py
 ```
 
