@@ -74,6 +74,7 @@
 | `percentile_ctx.py` | 그 5.8년으로 **"지금 값이 역사적으로 어디쯤인가"** 기준표. 봇이 부른다 |
 | `feature_log.py` | 비가격 지표 매일 적립 (CoinGlass 이전 방식) |
 | `alert_parse.py` | 남의 알림 스트림을 **거래와 R** 로 되돌린다 (메시지 수 ≠ 거래 수) |
+| `tv_levels.py` | 트레이딩뷰 지표의 지지/저항을 **내보낸 CSV 로 역산**. `--check` 로 검증 |
 
 ### 봇을 고치는 패치
 
@@ -144,7 +145,7 @@ python3 demo_edge.py
 ## 쓰는 법
 
 ```bash
-python3 -m unittest discover -s tests -t .   # 879개 테스트
+python3 -m unittest discover -s tests -t .   # 894개 테스트
 python3 demo_edge.py
 ```
 
